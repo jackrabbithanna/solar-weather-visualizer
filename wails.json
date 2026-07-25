@@ -10,7 +10,5 @@
     "name": "jackrabbithanna",
     "email": "mark@jackrabbithanna.com"
   },
-  "buildtags": [
-    "webkit2_41"
-  ]
+  "build:tags": "webkit2_41"
 }
