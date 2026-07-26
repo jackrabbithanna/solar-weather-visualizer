@@ -335,6 +335,7 @@ export namespace domain {
 	    points: TelemetryPoint[];
 	    gaps?: DataGap[];
 	    provenance: Provenance;
+	    contributors?: Provenance[];
 	    issues?: ProviderIssue[];
 	
 	    static createFrom(source: any = {}) {
@@ -351,6 +352,7 @@ export namespace domain {
 	        this.points = this.convertValues(source["points"], TelemetryPoint);
 	        this.gaps = this.convertValues(source["gaps"], DataGap);
 	        this.provenance = this.convertValues(source["provenance"], Provenance);
+	        this.contributors = this.convertValues(source["contributors"], Provenance);
 	        this.issues = this.convertValues(source["issues"], ProviderIssue);
 	    }
 	

@@ -1,11 +1,13 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +38,39 @@ type hapiParameter struct {
 type hapiResponse struct {
 	Parameters []hapiParameter     `json:"parameters"`
 	Data       [][]json.RawMessage `json:"data"`
+	Status     hapiStatus          `json:"status"`
+}
+
+type hapiStatus struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+var malformedHAPINoData = regexp.MustCompile(
+	`"data"\s*:\s*\[\s*,\s*"status"\s*:`,
+)
+
+// DecodeMalformedJSON handles a CDAWeb HAPI defect observed for empty time
+// ranges. The service returns HTTP 200/status 1201, but serializes the empty
+// data array as `"data":[,` and therefore cannot be decoded as JSON.
+func (response *hapiResponse) DecodeMalformedJSON(raw []byte) error {
+	repaired := malformedHAPINoData.ReplaceAll(
+		raw,
+		[]byte(`"data":[],"status":`),
+	)
+	if bytes.Equal(repaired, raw) {
+		return fmt.Errorf("not the CDAWeb empty-data response")
+	}
+	type plainHAPIResponse hapiResponse
+	var decoded plainHAPIResponse
+	if err := json.Unmarshal(repaired, &decoded); err != nil {
+		return err
+	}
+	if decoded.Status.Code != 1201 || len(decoded.Data) != 0 {
+		return fmt.Errorf("unexpected HAPI status %d after empty-data repair", decoded.Status.Code)
+	}
+	*response = hapiResponse(decoded)
+	return nil
 }
 
 type omniLevel struct {
@@ -81,7 +116,25 @@ func selectOMNILevel(start, end time.Time) omniLevel {
 	}
 }
 
+func ReplayCadence(start, end time.Time) time.Duration {
+	return selectOMNILevel(start, end).Cadence
+}
+
 func (c *OMNIClient) Telemetry(ctx context.Context, query domain.TelemetryQuery) (domain.TelemetrySeriesDTO, error) {
+	return c.telemetry(ctx, query, true)
+}
+
+// RawTelemetry retains all normalized provider samples so the replay router can
+// merge OMNI with a recent-history source before applying the frontend budget.
+func (c *OMNIClient) RawTelemetry(ctx context.Context, query domain.TelemetryQuery) (domain.TelemetrySeriesDTO, error) {
+	return c.telemetry(ctx, query, false)
+}
+
+func (c *OMNIClient) telemetry(
+	ctx context.Context,
+	query domain.TelemetryQuery,
+	applyPointLimit bool,
+) (domain.TelemetrySeriesDTO, error) {
 	start, end, err := domain.ValidateRange(query.Start, query.End)
 	if err != nil {
 		return domain.TelemetrySeriesDTO{}, err
@@ -117,9 +170,14 @@ func (c *OMNIClient) Telemetry(ctx context.Context, query domain.TelemetryQuery)
 	}
 	points = deduplicatePoints(points)
 	gaps := detectGaps(points, level.Cadence)
-	points = downsampleTelemetry(points, maxPoints)
+	if applyPointLimit {
+		points = downsampleTelemetry(points, maxPoints)
+	}
 
 	retrievedAt := time.Now().UTC()
+	if c.Now != nil {
+		retrievedAt = c.Now().UTC()
+	}
 	cached := len(metas) > 0
 	stale := false
 	for _, meta := range metas {
@@ -182,6 +240,9 @@ func (c *OMNIClient) fetchChunk(
 	if err != nil {
 		return nil, FetchMeta{}, err
 	}
+	if response.Status.Code == 1201 {
+		return nil, meta, nil
+	}
 	points, err := normalizeHAPI(response, level)
 	return points, meta, err
 }
@@ -238,7 +299,9 @@ func normalizeHAPI(response hapiResponse, level omniLevel) ([]domain.TelemetryPo
 		} else {
 			point.Source = point.PlasmaSource
 		}
-		points = append(points, point)
+		if hasTelemetryValues(point) {
+			points = append(points, point)
+		}
 	}
 	return points, nil
 }
@@ -272,7 +335,7 @@ func rawSource(row []json.RawMessage, index int, fill *float64) string {
 	if value == nil {
 		return ""
 	}
-	return strconv.Itoa(int(*value))
+	return "OMNI source " + strconv.Itoa(int(*value))
 }
 
 func deduplicatePoints(input []domain.TelemetryPoint) []domain.TelemetryPoint {

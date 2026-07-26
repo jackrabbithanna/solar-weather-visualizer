@@ -18,6 +18,8 @@ This document is updated as phases move from architecture to usable behavior.
   resort.
 - DONKI CME, flare, HSS, SEP, shock, storm, and WSA-ENLIL normalization.
 - NOAA active-source live wind, field, X-ray, and ENLIL Earth time series.
+- NOAA active-source Replay history as a rolling 90-day bridge for OMNI
+  publication lag, decoded with pure-Go HTTP/CSV.
 - CDAWeb OMNI range chunking, automatic cadence selection, fill-value handling,
   gap detection, deduplication, and spike-preserving point budgets.
 - Unit coverage for malformed/partial scientific records and cache fallback.

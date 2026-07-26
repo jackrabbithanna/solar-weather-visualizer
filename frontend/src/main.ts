@@ -5,7 +5,8 @@ import {domain} from '../wailsjs/go/models';
 import {backend} from './api';
 import {renderTelemetryCharts} from './charts';
 import {HeliosphereScene} from './scene/HeliosphereScene';
-import {AppState, AppStore, nearestTelemetry, RadialScale} from './state';
+import {AppState, AppStore, RadialScale, telemetryAtCursor} from './state';
+import {utcInput, utcInputDate} from './utc';
 
 const HOUR_MS = 3_600_000;
 const LIVE_TELEMETRY_WINDOW_MS = 3 * HOUR_MS;
@@ -73,6 +74,7 @@ app.innerHTML = `
     <aside class="inspector panel">
       <div class="panel-heading">
         <div><span class="eyebrow">At cursor</span><h2>Conditions near Earth</h2></div>
+        <time id="conditions-time" class="conditions-time" aria-live="polite">—</time>
       </div>
       <div id="readouts" class="readout-grid"></div>
       <section id="event-detail" class="event-detail"></section>
@@ -114,9 +116,9 @@ app.innerHTML = `
 <dialog id="range-dialog">
   <form method="dialog" class="dialog-card" id="range-form">
     <header><div><span class="eyebrow">Historical search</span><h2>Explore a UTC interval</h2></div><button value="cancel" class="icon-button">×</button></header>
-    <p>DONKI events, OMNI observations, and available WSA-ENLIL forecasts load independently. Long OMNI ranges automatically use coarser cadence.</p>
-    <label>Start <input id="range-start-input" type="datetime-local" required/></label>
-    <label>End <input id="range-end-input" type="datetime-local" required/></label>
+    <p>DONKI events, routed OMNI/NOAA observations, and available WSA-ENLIL forecasts load independently. All values below are interpreted as UTC.</p>
+    <label>Start (UTC) <input id="range-start-input" type="datetime-local" step="60" required/></label>
+    <label>End (UTC) <input id="range-end-input" type="datetime-local" step="60" required/></label>
     <fieldset>
       <legend>Include event types</legend>
       <div id="dialog-event-filters" class="check-grid"></div>
@@ -173,7 +175,7 @@ const sceneHost = required<HTMLElement>('scene-host');
 const scene = new HeliosphereScene(sceneHost);
 type ReplaySnapshot = Pick<
     AppState,
-    'events' | 'telemetry' | 'forecasts' | 'rangeStart' | 'rangeEnd' | 'status'
+    'events' | 'telemetry' | 'telemetryError' | 'forecasts' | 'rangeStart' | 'rangeEnd' | 'status'
 >;
 let lastEventRender = '';
 let lastChartRender = '';
@@ -255,24 +257,71 @@ function providerLabel(): string {
 
 function renderReadouts(): void {
     const state = store.state;
-    const point = nearestTelemetry(state.telemetry?.points ?? state.live?.recent, state.cursor);
-    const signature = `${point?.time}|${state.live?.time}|${point?.source}`;
+    const telemetry = state.telemetry;
+    const telemetryLoading = state.loading.has('telemetry');
+    const live = state.mode === 'live' ? state.live : undefined;
+    const point = telemetryAtCursor(
+        telemetry?.points ?? live?.recent,
+        state.cursor,
+        telemetry?.gaps,
+    );
+    const signature = [
+        point?.time,
+        point?.speedKms,
+        point?.densityPerCm3,
+        point?.pressureNPa,
+        point?.bzGsmNt,
+        point?.fieldMagnitudeNt,
+        point?.source,
+        live?.time,
+        telemetryLoading,
+        state.telemetryError,
+    ].join('|');
     if (signature === lastReadoutRender) return;
     lastReadoutRender = signature;
-    const values = [
-        ['Solar wind', point?.speedKms ?? state.live?.speedKms, 'km/s', 'speed'],
-        ['Density', point?.densityPerCm3 ?? state.live?.densityPerCm3, 'p/cm³', 'density'],
-        ['Pressure', point?.pressureNPa ?? state.live?.pressureNPa, 'nPa', 'pressure'],
-        ['IMF Bz', point?.bzGsmNt ?? state.live?.bzGsmNt, 'nT GSM', 'bz'],
-        ['Field |B|', point?.fieldMagnitudeNt ?? state.live?.fieldMagnitudeNt, 'nT', 'field'],
-        ['Source', undefined, point?.source ?? state.live?.plasmaSource ?? '—', 'source'],
-    ] as const;
-    required('readouts').innerHTML = values.map(([label, value, unit, className]) => `
-      <div class="readout ${className}">
-        <span>${label}</span>
-        <strong>${value === undefined ? escapeHTML(unit) : formatValue(value)}</strong>
-        ${value === undefined ? '' : `<small>${unit}</small>`}
+    const observedTime = point?.time ?? live?.time;
+    const parsedObservedTime = Date.parse(observedTime ?? '');
+    const conditionsTime = required('conditions-time');
+    conditionsTime.classList.toggle('loading', telemetryLoading);
+    conditionsTime.textContent = telemetryLoading
+        ? 'Fetching Replay telemetry…'
+        : state.telemetryError
+            ? 'Telemetry unavailable'
+            : Number.isFinite(parsedObservedTime)
+                ? `Observation ${longUTC(parsedObservedTime)}`
+                : 'No observation at cursor';
+    const values: Array<{
+        label: string;
+        value?: number;
+        text?: string;
+        unit?: string;
+        className: string;
+    }> = [
+        {label: 'Solar wind', value: point?.speedKms ?? live?.speedKms, unit: 'km/s', className: 'speed'},
+        {label: 'Density', value: point?.densityPerCm3 ?? live?.densityPerCm3, unit: 'p/cm³', className: 'density'},
+        {label: 'Pressure', value: point?.pressureNPa ?? live?.pressureNPa, unit: 'nPa', className: 'pressure'},
+        {label: 'IMF Bz', value: point?.bzGsmNt ?? live?.bzGsmNt, unit: 'nT GSM', className: 'bz'},
+        {label: 'Field |B|', value: point?.fieldMagnitudeNt ?? live?.fieldMagnitudeNt, unit: 'nT', className: 'field'},
+        {label: 'Source', text: telemetrySourceText(point, live), className: 'source'},
+    ];
+    required('readouts').innerHTML = values.map((item) => `
+      <div class="readout ${item.className}">
+        <span>${item.label}</span>
+        <strong>${item.text !== undefined
+            ? escapeHTML(item.text)
+            : item.value === undefined ? '—' : formatValue(item.value)}</strong>
+        ${item.text === undefined && item.unit ? `<small>${item.unit}</small>` : ''}
       </div>`).join('');
+}
+
+function telemetrySourceText(
+    point: domain.TelemetryPoint | undefined,
+    live: domain.LiveSnapshotDTO | undefined,
+): string {
+    const imf = point?.imfSource ?? live?.imfSource;
+    const plasma = point?.plasmaSource ?? live?.plasmaSource;
+    if (imf && plasma && imf !== plasma) return `IMF ${imf} · Plasma ${plasma}`;
+    return imf ?? plasma ?? point?.source ?? '—';
 }
 
 function renderEvents(): void {
@@ -375,24 +424,81 @@ function renderForecast(): void {
 }
 
 function renderCharts(): void {
-    const points = store.state.telemetry?.points ?? store.state.live?.recent ?? [];
+    const state = store.state;
+    const telemetry = state.telemetry;
+    const telemetryLoading = state.loading.has('telemetry');
+    const points = telemetry?.points ?? state.live?.recent ?? [];
     const event = selectedEvent();
     const markerTime = event ? eventCatalogTime(event) : undefined;
     const signature = [
         points.length,
         points[0]?.time,
-        Math.round(store.state.cursor / 60_000),
+        points[points.length - 1]?.time,
+        telemetry?.query?.start,
+        telemetry?.query?.end,
+        telemetry?.provenance?.retrievedAt,
+        telemetry?.gaps?.map((gap) => `${gap.start}:${gap.end}`).join(','),
+        telemetry?.issues?.map((issue) => `${issue.provider}:${issue.code}:${issue.message}`).join('|'),
+        state.rangeStart,
+        state.rangeEnd,
+        Math.round(state.cursor / 60_000),
+        telemetryLoading,
+        state.telemetryError,
         event?.id,
         markerTime,
     ].join('|');
     if (signature === lastChartRender) return;
     lastChartRender = signature;
+    if (telemetryLoading) {
+        renderTelemetryState(
+            'loading',
+            'Fetching OMNI and recent NOAA telemetry…',
+            `${longUTC(state.rangeStart)} – ${longUTC(state.rangeEnd)}`,
+        );
+        return;
+    }
+    if (state.telemetryError) {
+        renderTelemetryState(
+            'error',
+            'Telemetry request finished with an error',
+            `${state.telemetryError} No background retry is running.`,
+        );
+        return;
+    }
+    if (!points.length && telemetry?.issues?.length) {
+        renderTelemetryState(
+            'error',
+            'Replay telemetry providers returned no usable data',
+            `${telemetry.issues.map((issue) =>
+                `${issue.provider}: ${issue.message}`).join(' ')} No background retry is running.`,
+        );
+        return;
+    }
     renderTelemetryCharts(
         required('charts'),
         points,
-        store.state.cursor,
-        event && markerTime !== undefined ? {time: markerTime, label: event.title} : undefined,
+        {
+            start: state.rangeStart,
+            end: state.rangeEnd,
+            cursor: state.cursor,
+            gaps: telemetry?.gaps,
+            dataset: telemetry?.dataset,
+            issueCount: telemetry?.issues?.length,
+            cached: telemetry?.provenance?.cached,
+            stale: telemetry?.provenance?.stale,
+            selectedEvent: event && markerTime !== undefined
+                ? {time: markerTime, label: event.title}
+                : undefined,
+        },
     );
+}
+
+function renderTelemetryState(kind: 'loading' | 'error', title: string, detail: string): void {
+    required('charts').innerHTML = `
+      <div class="telemetry-state ${kind}" role="status">
+        <i aria-hidden="true"></i>
+        <span><strong>${escapeHTML(title)}</strong><small>${escapeHTML(detail)}</small></span>
+      </div>`;
 }
 
 function selectedEvent(): domain.EventDTO | undefined {
@@ -462,6 +568,7 @@ async function loadDemo(): Promise<void> {
             mode: 'replay',
             events: demo.events,
             telemetry: demo.telemetry,
+            telemetryError: undefined,
             forecasts: demo.forecasts,
             selectedEventID: undefined,
             playing: false,
@@ -478,6 +585,9 @@ async function loadDemo(): Promise<void> {
 async function loadRange(start: Date, end: Date): Promise<void> {
     store.change({
         mode: 'replay',
+        live: undefined,
+        telemetry: undefined,
+        telemetryError: undefined,
         selectedEventID: undefined,
         playing: false,
         status: 'Loading independent provider streams…',
@@ -508,10 +618,13 @@ async function loadRange(start: Date, end: Date): Promise<void> {
     }
     else toast(`Events: ${errorText(events.reason)}`);
     if (telemetry.status === 'fulfilled') {
-        store.change({telemetry: telemetry.value});
+        store.change({telemetry: telemetry.value, telemetryError: undefined});
         reportIssues(telemetry.value.issues);
+    } else {
+        const message = errorText(telemetry.reason);
+        store.change({telemetryError: message});
+        toast(`Telemetry: ${message}`);
     }
-    else toast(`Telemetry: ${errorText(telemetry.reason)}`);
     if (forecasts.status === 'fulfilled') {
         store.change({forecasts: forecasts.value});
         reportIssues(forecasts.value.issues);
@@ -533,7 +646,12 @@ async function enterLive(): Promise<void> {
     const requestVersion = ++liveRequestVersion;
     const end = new Date();
     const start = new Date(end.getTime() - LIVE_EVENT_WINDOW_MS);
-    store.change({mode: 'live', playing: false, status: 'Contacting NOAA SWPC…'});
+    store.change({
+        mode: 'live',
+        telemetryError: undefined,
+        playing: false,
+        status: 'Contacting NOAA SWPC…',
+    });
     store.setLoading('live', true);
     const livePromise = backend.live();
     const eventPromise = backend.events(new domain.EventQuery({
@@ -573,6 +691,7 @@ function rememberReplay(): void {
     replaySnapshot = {
         events: store.state.events,
         telemetry: store.state.telemetry,
+        telemetryError: store.state.telemetryError,
         forecasts: store.state.forecasts,
         rangeStart: store.state.rangeStart,
         rangeEnd: store.state.rangeEnd,
@@ -627,10 +746,12 @@ function applyLiveSnapshot(snapshot: domain.LiveSnapshotDTO, status: string, fal
         cadenceSeconds: 60,
         points,
         provenance: snapshot.provenance?.[0],
+        contributors: snapshot.provenance,
     });
     store.change({
         live: snapshot,
         telemetry,
+        telemetryError: undefined,
         rangeStart: start,
         rangeEnd: end,
         cursor: end,
@@ -721,8 +842,8 @@ function wireInteractions(): void {
         const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
         if (submitter?.value !== 'default') return;
         event.preventDefault();
-        const start = localInputDate(required<HTMLInputElement>('range-start-input').value);
-        const end = localInputDate(required<HTMLInputElement>('range-end-input').value);
+        const start = utcInputDate(required<HTMLInputElement>('range-start-input').value);
+        const end = utcInputDate(required<HTMLInputElement>('range-end-input').value);
         if (!start || !end || end <= start) {
             toast('Choose an end time after the start time.');
             return;
@@ -757,8 +878,8 @@ function wireInteractions(): void {
 }
 
 function openRangeDialog(): void {
-    required<HTMLInputElement>('range-start-input').value = localInput(store.state.rangeStart);
-    required<HTMLInputElement>('range-end-input').value = localInput(store.state.rangeEnd);
+    required<HTMLInputElement>('range-start-input').value = utcInput(store.state.rangeStart);
+    required<HTMLInputElement>('range-end-input').value = utcInput(store.state.rangeEnd);
     required<HTMLDialogElement>('range-dialog').showModal();
 }
 
@@ -845,6 +966,7 @@ async function importBundle(): Promise<void> {
                 generatedAt: bundle.createdAt,
             }),
             telemetry: bundle.telemetry,
+            telemetryError: undefined,
             forecasts: new domain.ForecastResult({
                 forecasts: importedForecasts,
                 generatedAt: bundle.createdAt,
@@ -981,18 +1103,6 @@ function shortUTC(milliseconds: number): string {
         minute: '2-digit',
         hour12: false,
     }).format(milliseconds);
-}
-
-function localInput(milliseconds: number): string {
-    const date = new Date(milliseconds);
-    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-    return local.toISOString().slice(0, 16);
-}
-
-function localInputDate(value: string): Date | undefined {
-    if (!value) return undefined;
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 function formatBytes(bytes: number): string {

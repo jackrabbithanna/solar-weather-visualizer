@@ -27,15 +27,43 @@ as one replay interval.
 **Replay** enables the UTC timeline. Newly loaded replays begin paused at the
 start of their interval. Press play, choose a playback rate, or drag the time
 control. Pressing play at the end rewinds and starts the replay again. **Date
-range** loads three independent streams:
+range** fields are UTC wall-clock values regardless of the computer's timezone
+and load three independent streams:
 
 1. DONKI events.
-2. OMNI observations near Earth.
+2. Routed OMNI and recent NOAA observations near Earth.
 3. Available WSA-ENLIL forecast data.
 
-A failed stream is reported without clearing successful data. Long OMNI
+A failed stream is reported without clearing successful data. Long telemetry
 requests automatically move from one-minute to five-minute and then hourly
 data.
+
+Date Range provider requests run concurrently. While the telemetry request is
+active, the charts and **Conditions near Earth** show a dedicated fetching
+indicator; telemetry from the previous range is not reused. The completed chart
+reports the returned UTC coverage, sample and gap counts, provider warnings,
+and whether the response came from cache. A partial result is final for that
+request—there is no hidden background fetch after the indicator and provider
+loading state disappear.
+
+NASA's finalized OMNI observations can lag the current date. For the latest 90
+days, Replay also requests NOAA's active historical magnetic and plasma streams.
+OMNI remains authoritative through its last usable magnetic and plasma values;
+NOAA fills the recent trailing interval. NOAA values retain their original L1
+timestamps rather than being described as OMNI bow-shock-shifted data. CDAWeb's
+HAPI `1201` no-data response is treated as a completed empty interval rather
+than a failed request.
+
+The telemetry charts always use the same start and end as the Replay timeline.
+If OMNI covers only part of the requested interval, the line occupies only that
+part of the chart; missing periods remain blank rather than being stretched.
+Each chart prints its UTC domain below the plot.
+
+**Conditions near Earth** uses the latest routed observation at or before the
+Replay cursor and displays that observation’s UTC timestamp and separate IMF
+and plasma sources when they differ. Outside the returned coverage, or inside a
+reported data gap, the cards show unavailable values instead of holding an old
+endpoint observation.
 
 Selecting an event pauses Replay and seeks to a useful view of that event:
 flare selections use the reported peak, directed CME selections advance the

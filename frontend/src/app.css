@@ -173,6 +173,26 @@
     font-weight: 600;
 }
 
+.conditions-time {
+    max-width: 98px;
+    color: var(--muted);
+    font-size: 7px;
+    line-height: 1.4;
+    text-align: right;
+}
+
+.conditions-time.loading::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    margin-right: 4px;
+    display: inline-block;
+    border: 1px solid rgba(92, 224, 209, .25);
+    border-top-color: var(--teal);
+    border-radius: 50%;
+    animation: telemetry-spin .8s linear infinite;
+}
+
 .eyebrow {
     color: #7391a9;
     font-size: 9px;
@@ -679,8 +699,59 @@ input[type="range"]::-webkit-slider-thumb {
     padding: 8px 14px;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     gap: 11px;
     overflow: hidden;
+}
+
+.chart-coverage {
+    grid-column: 1 / -1;
+    min-width: 0;
+    padding: 5px 8px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid rgba(92, 224, 209, .14);
+    border-radius: 5px;
+    color: #7992a6;
+    background: rgba(10, 29, 42, .48);
+}
+
+.chart-coverage.partial {
+    border-color: rgba(245, 188, 106, .25);
+    background: rgba(92, 64, 29, .14);
+}
+
+.chart-coverage > i {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--teal);
+    box-shadow: 0 0 7px rgba(92, 224, 209, .55);
+}
+
+.chart-coverage.partial > i {
+    background: var(--amber);
+    box-shadow: 0 0 7px rgba(245, 188, 106, .45);
+}
+
+.chart-coverage span, .chart-coverage strong, .chart-coverage small {
+    min-width: 0;
+    display: block;
+}
+
+.chart-coverage strong {
+    color: #adc4d3;
+    font-size: 8px;
+}
+
+.chart-coverage small {
+    margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 7px;
 }
 
 .mini-chart {
@@ -708,8 +779,16 @@ input[type="range"]::-webkit-slider-thumb {
 
 .mini-chart svg {
     width: 100%;
-    height: 100px;
+    height: 88px;
     overflow: visible;
+}
+
+.chart-domain {
+    padding: 0 10px 0 42px;
+    display: flex;
+    justify-content: space-between;
+    color: #536e84;
+    font-size: 6px;
 }
 
 .mini-chart path {
@@ -749,6 +828,63 @@ input[type="range"]::-webkit-slider-thumb {
     place-items: center;
     color: var(--muted);
     font-size: 10px;
+}
+
+.telemetry-state {
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    color: var(--muted);
+    text-align: left;
+}
+
+.telemetry-state > i {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+    border: 2px solid rgba(92, 224, 209, .18);
+    border-radius: 50%;
+}
+
+.telemetry-state.loading > i {
+    border-top-color: var(--teal);
+    animation: telemetry-spin .8s linear infinite;
+}
+
+.telemetry-state.error > i {
+    border-color: var(--red);
+}
+
+.telemetry-state.complete > i {
+    border-color: var(--amber);
+}
+
+.telemetry-state span, .telemetry-state strong, .telemetry-state small {
+    display: block;
+}
+
+.telemetry-state strong {
+    color: #a9c2d2;
+    font-size: 10px;
+}
+
+.telemetry-state small {
+    max-width: 620px;
+    margin-top: 3px;
+    font-size: 8px;
+    line-height: 1.4;
+}
+
+@keyframes telemetry-spin {
+    to { transform: rotate(360deg); }
+}
+
+.reduced-motion .telemetry-state.loading > i,
+.reduced-motion .conditions-time.loading::before {
+    animation: none;
 }
 
 .statusbar {

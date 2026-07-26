@@ -9,6 +9,7 @@ export interface AppState {
     live?: domain.LiveSnapshotDTO;
     events?: domain.EventSearchResult;
     telemetry?: domain.TelemetrySeriesDTO;
+    telemetryError?: string;
     forecasts?: domain.ForecastResult;
     rangeStart: number;
     rangeEnd: number;
@@ -86,11 +87,24 @@ export class AppStore extends EventTarget {
     }
 }
 
-export function nearestTelemetry(
+export function telemetryAtCursor(
     points: domain.TelemetryPoint[] | undefined,
     cursor: number,
+    gaps: domain.DataGap[] | undefined = undefined,
 ): domain.TelemetryPoint | undefined {
     if (!points?.length) return undefined;
+    const first = Date.parse(points[0].time);
+    const last = Date.parse(points[points.length - 1].time);
+    if (!Number.isFinite(first) || !Number.isFinite(last) || cursor < first || cursor > last) {
+        return undefined;
+    }
+    if (gaps?.some((gap) => {
+        const start = Date.parse(gap.start);
+        const end = Date.parse(gap.end);
+        return Number.isFinite(start) && Number.isFinite(end) && cursor > start && cursor < end;
+    })) {
+        return undefined;
+    }
     let low = 0;
     let high = points.length - 1;
     while (low < high) {
@@ -98,10 +112,7 @@ export function nearestTelemetry(
         if (Date.parse(points[middle].time) < cursor) low = middle + 1;
         else high = middle;
     }
-    if (low > 0) {
-        const left = Math.abs(Date.parse(points[low - 1].time) - cursor);
-        const right = Math.abs(Date.parse(points[low].time) - cursor);
-        return left < right ? points[low - 1] : points[low];
-    }
-    return points[low];
+    return Date.parse(points[low].time) === cursor
+        ? points[low]
+        : points[Math.max(0, low - 1)];
 }

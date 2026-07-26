@@ -56,7 +56,7 @@ export const backend = {
     },
 
     telemetry(query: domain.TelemetryQuery): Promise<domain.TelemetrySeriesDTO> {
-        if (!hasWails()) return Promise.reject(new Error('Historical OMNI data is available in the Wails desktop app.'));
+        if (!hasWails()) return Promise.reject(new Error('Historical Replay telemetry is available in the Wails desktop app.'));
         return LoadTelemetry(query);
     },
 
@@ -169,6 +169,7 @@ function browserDemo(): domain.DemoScenarioDTO {
             cadenceSeconds: 900,
             points: telemetry,
             provenance,
+            contributors: [provenance],
         },
         forecasts: {
             forecasts: [],

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
 import {domain} from '../../wailsjs/go/models';
-import {AppState, nearestTelemetry} from '../state';
+import {AppState, telemetryAtCursor} from '../state';
 
 const AU_KM = 149_597_870.7;
 const SOLAR_RADIUS_AU = 695_700 / AU_KM;
@@ -447,7 +447,11 @@ export class HeliosphereScene {
     }
 
     private updateWind(time: number): void {
-        const points = nearestTelemetry(this.state?.telemetry?.points ?? this.state?.live?.recent, this.state?.cursor ?? 0);
+        const points = telemetryAtCursor(
+            this.state?.telemetry?.points ?? this.state?.live?.recent,
+            this.state?.cursor ?? 0,
+            this.state?.telemetry?.gaps,
+        );
         const speed = points?.speedKms ?? this.state?.live?.speedKms ?? 400;
         const positions = this.windParticles.geometry.getAttribute('position') as THREE.BufferAttribute;
         const elapsed = Math.min(0.1, Math.max(0, (time - this.lastWindTime) / 1_000));

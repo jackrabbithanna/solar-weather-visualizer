@@ -17,15 +17,17 @@ import (
 const (
 	ApplicationName    = "solar-weather-visualizer"
 	ApplicationVersion = "0.1.0"
+	replayBridgeWindow = 90 * 24 * time.Hour
 )
 
 type Service struct {
-	Store *store.Store
-	HTTP  *providers.CachedHTTP
-	DONKI *providers.DonkiClient
-	SWPC  *providers.SWPCClient
-	OMNI  *providers.OMNIClient
-	Now   func() time.Time
+	Store   *store.Store
+	HTTP    *providers.CachedHTTP
+	DONKI   *providers.DonkiClient
+	SWPC    *providers.SWPCClient
+	OMNI    *providers.OMNIClient
+	History *providers.SWPCHistoryClient
+	Now     func() time.Time
 
 	statusMu sync.Mutex
 	status   map[string]domain.ProviderStatus
@@ -42,12 +44,13 @@ func New() (*Service, error) {
 func NewWithStore(persistence *store.Store) *Service {
 	httpClient := providers.NewCachedHTTP(persistence)
 	return &Service{
-		Store: persistence,
-		HTTP:  httpClient,
-		DONKI: providers.NewDonkiClient(httpClient),
-		SWPC:  providers.NewSWPCClient(httpClient),
-		OMNI:  providers.NewOMNIClient(httpClient),
-		Now:   time.Now,
+		Store:   persistence,
+		HTTP:    httpClient,
+		DONKI:   providers.NewDonkiClient(httpClient),
+		SWPC:    providers.NewSWPCClient(httpClient),
+		OMNI:    providers.NewOMNIClient(httpClient),
+		History: providers.NewSWPCHistoryClient(httpClient),
+		Now:     time.Now,
 		status: map[string]domain.ProviderStatus{
 			"NASA CCMC / DONKI": {Provider: "NASA CCMC / DONKI"},
 			"NOAA SWPC":         {Provider: "NOAA SWPC"},
@@ -158,9 +161,87 @@ func (s *Service) LoadTelemetry(
 	ctx context.Context,
 	query domain.TelemetryQuery,
 ) (domain.TelemetrySeriesDTO, error) {
-	result, err := s.OMNI.Telemetry(ctx, query)
-	s.recordStatus("NASA CDAWeb", err)
-	return result, err
+	start, end, err := domain.ValidateRange(query.Start, query.End)
+	if err != nil {
+		return domain.TelemetrySeriesDTO{}, err
+	}
+	now := s.now()
+	cadence := providers.ReplayCadence(start, end)
+	type providerResult struct {
+		series domain.TelemetrySeriesDTO
+		err    error
+	}
+	omniResult := make(chan providerResult, 1)
+	go func() {
+		series, fetchErr := s.OMNI.RawTelemetry(ctx, query)
+		omniResult <- providerResult{series: series, err: fetchErr}
+	}()
+
+	recentStart := start
+	if cutoff := now.Add(-replayBridgeWindow); recentStart.Before(cutoff) {
+		recentStart = cutoff
+	}
+	recentEnd := end
+	if recentEnd.After(now) {
+		recentEnd = now
+	}
+	noaaApplicable := recentStart.Before(recentEnd)
+	var noaaResult chan providerResult
+	if noaaApplicable {
+		noaaResult = make(chan providerResult, 1)
+		recentQuery := query
+		recentQuery.Start = domain.FormatTime(recentStart)
+		recentQuery.End = domain.FormatTime(recentEnd)
+		go func() {
+			series, fetchErr := s.History.Telemetry(ctx, recentQuery, cadence)
+			noaaResult <- providerResult{series: series, err: fetchErr}
+		}()
+	}
+
+	omni := <-omniResult
+	s.recordStatus("NASA CDAWeb", omni.err)
+	var noaa providerResult
+	if noaaApplicable {
+		noaa = <-noaaResult
+		s.recordStatus("NOAA SWPC", noaa.err)
+	}
+	if omni.err != nil && (!noaaApplicable || noaa.err != nil) {
+		if noaaApplicable {
+			return domain.TelemetrySeriesDTO{}, fmt.Errorf(
+				"replay telemetry providers failed: OMNI: %v; NOAA: %v",
+				omni.err,
+				noaa.err,
+			)
+		}
+		return domain.TelemetrySeriesDTO{}, fmt.Errorf("OMNI telemetry failed: %w", omni.err)
+	}
+
+	var omniSeries *domain.TelemetrySeriesDTO
+	var noaaSeries *domain.TelemetrySeriesDTO
+	var issues []domain.ProviderIssue
+	if omni.err == nil {
+		omniSeries = &omni.series
+	} else {
+		issues = append(issues, domain.ProviderIssue{
+			Provider:  "NASA CDAWeb",
+			Code:      "omni_history",
+			Message:   omni.err.Error(),
+			Retryable: providers.IsRetryable(omni.err),
+		})
+	}
+	if noaaApplicable {
+		if noaa.err == nil {
+			noaaSeries = &noaa.series
+		} else {
+			issues = append(issues, domain.ProviderIssue{
+				Provider:  "NOAA SWPC",
+				Code:      "replay_history",
+				Message:   noaa.err.Error(),
+				Retryable: providers.IsRetryable(noaa.err),
+			})
+		}
+	}
+	return providers.MergeReplayTelemetry(query, cadence, omniSeries, noaaSeries, issues), nil
 }
 
 func (s *Service) SearchEvents(

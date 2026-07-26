@@ -31,6 +31,12 @@ type CachedHTTP struct {
 	Now       func() time.Time
 }
 
+type malformedJSONFallback interface {
+	DecodeMalformedJSON([]byte) error
+}
+
+type payloadDecoder func([]byte) error
+
 func NewCachedHTTP(cache *store.Store) *CachedHTTP {
 	return &CachedHTTP{
 		Client:    &http.Client{Timeout: 25 * time.Second},
@@ -47,6 +53,40 @@ func (c *CachedHTTP) GetJSON(
 	cacheKey string,
 	ttl time.Duration,
 	destination any,
+) (FetchMeta, error) {
+	return c.GetDecoded(
+		ctx,
+		requestURL,
+		cacheKey,
+		ttl,
+		"application/json",
+		destination,
+		func(body []byte) error {
+			decodeErr := json.Unmarshal(body, destination)
+			if decodeErr == nil {
+				return nil
+			}
+			if fallback, ok := destination.(malformedJSONFallback); ok {
+				if err := fallback.DecodeMalformedJSON(body); err == nil {
+					return nil
+				}
+			}
+			return decodeErr
+		},
+	)
+}
+
+// GetDecoded applies a caller-supplied wire decoder while caching the decoded
+// destination as JSON. This keeps cache and stale-response behavior consistent
+// for providers whose public endpoint returns CSV instead of JSON.
+func (c *CachedHTTP) GetDecoded(
+	ctx context.Context,
+	requestURL string,
+	cacheKey string,
+	ttl time.Duration,
+	accept string,
+	destination any,
+	decode payloadDecoder,
 ) (FetchMeta, error) {
 	if c.Store != nil {
 		meta, err := c.Store.GetJSON(cacheKey, destination, false)
@@ -68,7 +108,10 @@ func (c *CachedHTTP) GetJSON(
 		userAgent = defaultUserAgent
 	}
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
+	if accept == "" {
+		accept = "*/*"
+	}
+	req.Header.Set("Accept", accept)
 
 	client := c.Client
 	if client == nil {
@@ -89,9 +132,13 @@ func (c *CachedHTTP) GetJSON(
 			if maxBytes <= 0 {
 				maxBytes = 64 << 20
 			}
-			decoder := json.NewDecoder(io.LimitReader(response.Body, maxBytes))
-			if err := decoder.Decode(destination); err != nil {
-				requestErr = fmt.Errorf("decode %s: %w", redactedURL(requestURL), err)
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBytes))
+			decodeErr := readErr
+			if decodeErr == nil {
+				decodeErr = decode(body)
+			}
+			if decodeErr != nil {
+				requestErr = fmt.Errorf("decode %s: %w", redactedURL(requestURL), decodeErr)
 			} else {
 				now := time.Now().UTC()
 				if c.Now != nil {

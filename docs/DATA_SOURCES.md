@@ -44,6 +44,29 @@ Reference: <https://ccmc.gsfc.nasa.gov/tools/DONKI/>
 
 Reference: <https://www.swpc.noaa.gov/products/real-time-solar-wind>
 
+## NOAA SWPC Replay solar wind
+
+- HAPI base: `https://tlv-swpc.woc.noaa.gov/hapi`
+- Purpose: recent historical L1 plasma and IMF while finalized OMNI data is not
+  yet available.
+- Datasets: the active `mag` and `plasma` streams at one-minute, five-minute,
+  or hourly cadence. Replay requests use the same cadence selected for OMNI.
+- Window: at most the latest 90 days, clipped to the selected Replay range and
+  current UTC time.
+- Wire format: the data endpoint returns CSV even when HAPI advertises JSON.
+  Requests therefore omit `format=json`, send the endpoint's required wildcard
+  `Accept` header, and use the standard-library CSV decoder. Asking for
+  `text/csv` currently returns HTTP 404. `-1e30` and the observed `-9999`
+  sentinel become null.
+- Precedence: OMNI remains authoritative through its last usable magnetic and
+  plasma observations. NOAA fills only the trailing portion of each metric
+  group. L1 timestamps are preserved and are not presented as bow-shock-shifted
+  observations.
+- Verified: 2026-07-25 against July 22–23, 2026 one-minute data; source code was
+  `4`.
+
+Reference: <https://www.spaceweather.gov/products/solar-wind>
+
 ## NOAA GOES X-rays
 
 - Primary one-day feed:
@@ -63,6 +86,8 @@ Reference: <https://www.swpc.noaa.gov/products/real-time-solar-wind>
   - `OMNI2_H0_MRG1HR` for viewports over 90 days or before one-minute coverage.
 - Fill values are declared in the HAPI response metadata and must become null.
 - `IMF` and `PLS`/their hourly equivalents identify source spacecraft.
+- Recent Replay requests are merged with NOAA SWPC history only after the final
+  usable OMNI magnetic/plasma timestamps.
 - Verified: 2026-07-25.
 
 Reference: <https://cdaweb.gsfc.nasa.gov/hapi>

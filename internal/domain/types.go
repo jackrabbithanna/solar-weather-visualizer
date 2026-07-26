@@ -170,6 +170,7 @@ type TelemetrySeriesDTO struct {
 	Points          []TelemetryPoint `json:"points"`
 	Gaps            []DataGap        `json:"gaps,omitempty"`
 	Provenance      Provenance       `json:"provenance"`
+	Contributors    []Provenance     `json:"contributors,omitempty"`
 	Issues          []ProviderIssue  `json:"issues,omitempty"`
 }
 
