@@ -242,21 +242,7 @@ func (c *SWPCClient) Live(ctx context.Context) (domain.LiveSnapshotDTO, error) {
 	snapshot.Recent = recent
 	snapshot.PlasmaSource = plasmaSource
 	snapshot.IMFSource = imfSource
-	if len(recent) > 0 {
-		latest := recent[len(recent)-1]
-		if snapshot.SpeedKMS == nil {
-			snapshot.SpeedKMS = latest.SpeedKMS
-		}
-		snapshot.DensityPerCM3 = latest.DensityPerCM3
-		snapshot.TemperatureK = latest.TemperatureK
-		snapshot.PressureNPa = latest.PressureNPa
-		if snapshot.FieldMagnitudeNT == nil {
-			snapshot.FieldMagnitudeNT = latest.FieldMagnitudeNT
-		}
-		if snapshot.BzGSMNT == nil {
-			snapshot.BzGSMNT = latest.BzGSMNT
-		}
-	}
+	fillLiveSnapshotFromRecent(&snapshot)
 	snapshot.XRay = normalizeXRays(xrays, now)
 	for _, name := range []string{"speed-summary", "field-summary", "wind", "mag", "xray"} {
 		meta, ok := metas[name]
@@ -275,6 +261,34 @@ func (c *SWPCClient) Live(ctx context.Context) (domain.LiveSnapshotDTO, error) {
 		})
 	}
 	return snapshot, nil
+}
+
+// fillLiveSnapshotFromRecent takes the newest available value for each
+// measurement instead of assuming that plasma and magnetometer records have
+// identical timestamps. NOAA's active instruments commonly publish those
+// streams a minute apart.
+func fillLiveSnapshotFromRecent(snapshot *domain.LiveSnapshotDTO) {
+	for index := len(snapshot.Recent) - 1; index >= 0; index-- {
+		point := snapshot.Recent[index]
+		if snapshot.SpeedKMS == nil && point.SpeedKMS != nil {
+			snapshot.SpeedKMS = point.SpeedKMS
+		}
+		if snapshot.DensityPerCM3 == nil && point.DensityPerCM3 != nil {
+			snapshot.DensityPerCM3 = point.DensityPerCM3
+		}
+		if snapshot.TemperatureK == nil && point.TemperatureK != nil {
+			snapshot.TemperatureK = point.TemperatureK
+		}
+		if snapshot.PressureNPa == nil && point.PressureNPa != nil {
+			snapshot.PressureNPa = point.PressureNPa
+		}
+		if snapshot.FieldMagnitudeNT == nil && point.FieldMagnitudeNT != nil {
+			snapshot.FieldMagnitudeNT = point.FieldMagnitudeNT
+		}
+		if snapshot.BzGSMNT == nil && point.BzGSMNT != nil {
+			snapshot.BzGSMNT = point.BzGSMNT
+		}
+	}
 }
 
 func mergeRecentRTSW(winds []rawWind, mags []rawMag, now time.Time) ([]domain.TelemetryPoint, string, string) {

@@ -4,7 +4,8 @@
 
 The application opens a deterministic 48-hour CME-passage walkthrough. It
 requires no network and is explicitly classified as illustrative. The
-three-page guide explains data classes, replay time, and the Earth-condition
+replay starts paused at the beginning of the interval with no event selected.
+The three-page guide explains data classes, replay time, and the Earth-condition
 charts.
 
 Drag to orbit the 3D camera, scroll to zoom, and use **Reset view** to return to
@@ -14,10 +15,17 @@ the overview.
 
 **Live** requests NOAA SWPC’s active real-time solar-wind, magnetic-field, and
 X-ray feeds. The current spacecraft source is shown; it is not assumed to
-always be DSCOVR or ACE. Live refresh has a minimum 30-second interval.
+always be DSCOVR or ACE. The timeline and telemetry charts show the latest
+three hours, while the event stream requests the preceding 24 hours. Live
+refresh has a minimum 30-second interval. Entering Live preserves the current
+Replay; switching back restores that Replay’s data and starts it from the
+beginning instead of treating the mismatched Live telemetry and event windows
+as one replay interval.
 
-**Replay** enables the UTC timeline. Press play, choose a playback rate, or drag
-the time control. **Date range** loads three independent streams:
+**Replay** enables the UTC timeline. Newly loaded replays begin paused at the
+start of their interval. Press play, choose a playback rate, or drag the time
+control. Pressing play at the end rewinds and starts the replay again. **Date
+range** loads three independent streams:
 
 1. DONKI events.
 2. OMNI observations near Earth.
@@ -26,6 +34,17 @@ the time control. **Date range** loads three independent streams:
 A failed stream is reported without clearing successful data. Long OMNI
 requests automatically move from one-minute to five-minute and then hourly
 data.
+
+Selecting an event pauses Replay and seeks to a useful view of that event:
+flare selections use the reported peak, directed CME selections advance the
+front into the heliosphere, and other event types use their catalog time. The
+selected event receives a bright scene marker while other event geometry is
+dimmed. Its catalog time is also marked on the telemetry charts. Live selections
+do not move the clock away from the newest observation.
+
+The event list shows the full catalog for the loaded interval. Event geometry
+and selection beacons in the Replay scene appear only while they are active at
+the current cursor time.
 
 ## The heliosphere view
 

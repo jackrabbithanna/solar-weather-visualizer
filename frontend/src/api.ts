@@ -111,7 +111,7 @@ function browserDemo(): domain.DemoScenarioDTO {
         description: 'A deterministic 48-hour replay for learning the controls.',
         start: start.toISOString(),
         end: end.toISOString(),
-        cursor: new Date(start.getTime() + 25 * 3_600_000).toISOString(),
+        cursor: start.toISOString(),
         events: {
             query: {start: start.toISOString(), end: end.toISOString()},
             complete: true,

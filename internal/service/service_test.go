@@ -56,6 +56,22 @@ func TestDemoScenarioIsSelfContained(t *testing.T) {
 	if demo.Telemetry.Provenance.Class != domain.DataIllustrative {
 		t.Fatalf("demo provenance is not illustrative: %#v", demo.Telemetry.Provenance)
 	}
+	if demo.Cursor != demo.Start {
+		t.Fatalf("demo must start at the beginning: cursor %q, start %q", demo.Cursor, demo.Start)
+	}
+	cursor, err := domain.ParseTime(demo.Cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range demo.Events.Events {
+		eventTime, err := domain.ParseTime(event.StartTime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !eventTime.After(cursor) {
+			t.Fatalf("demo event %q is already active at the initial cursor", event.ID)
+		}
+	}
 }
 
 func TestHistoricalReplayDoesNotMixInCurrentSWPCForecast(t *testing.T) {

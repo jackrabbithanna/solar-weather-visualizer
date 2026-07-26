@@ -31,7 +31,11 @@ Reference: <https://ccmc.gsfc.nasa.gov/tools/DONKI/>
   `https://services.swpc.noaa.gov/json/rtsw/rtsw_mag_1m.json`
 - Purpose: current L1 plasma and IMF plus the recent operational window.
 - Selection: prefer records with `active=true`; preserve spacecraft source and
-  quality flags. Multiple spacecraft may share a timestamp.
+  quality flags. Multiple spacecraft may share a timestamp. Plasma and
+  magnetometer streams are not assumed to be synchronized; the current
+  snapshot uses the newest available value from each stream.
+- Display window: the provider snapshot retains up to six recent hours; the
+  default Live timeline and telemetry charts display the newest three hours.
 - Nulls: alpha-particle fields and instrument-specific fields commonly contain
   JSON null.
 - Compact refresh: 60 seconds.

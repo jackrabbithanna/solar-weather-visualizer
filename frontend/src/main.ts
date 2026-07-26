@@ -5,7 +5,14 @@ import {domain} from '../wailsjs/go/models';
 import {backend} from './api';
 import {renderTelemetryCharts} from './charts';
 import {HeliosphereScene} from './scene/HeliosphereScene';
-import {AppStore, nearestTelemetry, RadialScale} from './state';
+import {AppState, AppStore, nearestTelemetry, RadialScale} from './state';
+
+const HOUR_MS = 3_600_000;
+const LIVE_TELEMETRY_WINDOW_MS = 3 * HOUR_MS;
+const LIVE_EVENT_WINDOW_MS = 24 * HOUR_MS;
+const AU_KM = 149_597_870.7;
+const INITIAL_CME_RADIUS_AU = 21.5 * 695_700 / AU_KM;
+const SELECTED_CME_FOCUS_AU = 0.7;
 
 const app = document.querySelector<HTMLElement>('#app');
 if (!app) throw new Error('Application root is missing');
@@ -164,6 +171,10 @@ app.innerHTML = `
 const store = new AppStore();
 const sceneHost = required<HTMLElement>('scene-host');
 const scene = new HeliosphereScene(sceneHost);
+type ReplaySnapshot = Pick<
+    AppState,
+    'events' | 'telemetry' | 'forecasts' | 'rangeStart' | 'rangeEnd' | 'status'
+>;
 let lastEventRender = '';
 let lastChartRender = '';
 let lastDetailRender = '';
@@ -171,6 +182,8 @@ let lastReadoutRender = '';
 let lastForecastRender = '';
 let renderQueued = false;
 let liveTimer: number | undefined;
+let liveRequestVersion = 0;
+let replaySnapshot: ReplaySnapshot | undefined;
 
 const eventKinds = [
     ['cme', 'CME'],
@@ -197,10 +210,7 @@ function queueRender(): void {
 }
 
 store.addEventListener('change', queueRender);
-scene.onEventSelected = (id) => {
-    store.change({selectedEventID: id});
-    scene.focusEvent(id);
-};
+scene.onEventSelected = (id) => selectEvent(id);
 
 function renderUI(): void {
     const state = store.state;
@@ -278,7 +288,10 @@ function renderEvents(): void {
     document.querySelectorAll<HTMLButtonElement>('#event-filters [data-kind]').forEach((button) => {
         button.onclick = () => {
             const kind = button.dataset.kind;
-            if (kind) store.toggleFilter(kind);
+            if (!kind) return;
+            store.toggleFilter(kind);
+            const selectedEventID = preferredEventID(store.state.events?.events ?? [], store.state.selectedEventID);
+            if (selectedEventID !== store.state.selectedEventID) store.change({selectedEventID});
         };
     });
     const events = (state.events?.events ?? []).filter((event) => state.eventFilters.has(event.kind));
@@ -293,8 +306,7 @@ function renderEvents(): void {
         button.onclick = () => {
             const id = button.dataset.eventId;
             if (!id) return;
-            store.change({selectedEventID: id});
-            scene.focusEvent(id);
+            selectEvent(id);
         };
     });
 }
@@ -356,10 +368,74 @@ function renderForecast(): void {
 
 function renderCharts(): void {
     const points = store.state.telemetry?.points ?? store.state.live?.recent ?? [];
-    const signature = `${points.length}|${points[0]?.time}|${Math.round(store.state.cursor / 60_000)}`;
+    const event = selectedEvent();
+    const markerTime = event ? eventCatalogTime(event) : undefined;
+    const signature = [
+        points.length,
+        points[0]?.time,
+        Math.round(store.state.cursor / 60_000),
+        event?.id,
+        markerTime,
+    ].join('|');
     if (signature === lastChartRender) return;
     lastChartRender = signature;
-    renderTelemetryCharts(required('charts'), points, store.state.cursor);
+    renderTelemetryCharts(
+        required('charts'),
+        points,
+        store.state.cursor,
+        event && markerTime !== undefined ? {time: markerTime, label: event.title} : undefined,
+    );
+}
+
+function selectedEvent(): domain.EventDTO | undefined {
+    return store.state.events?.events.find((event) => event.id === store.state.selectedEventID);
+}
+
+function selectEvent(id: string): void {
+    const event = store.state.events?.events.find((item) => item.id === id);
+    if (!event) return;
+    const patch: Partial<AppState> = {selectedEventID: id};
+    if (store.state.mode === 'replay') {
+        patch.cursor = eventFocusTime(event);
+        patch.playing = false;
+    }
+    store.change(patch);
+    scene.focusEvent(id);
+}
+
+function eventCatalogTime(event: domain.EventDTO): number | undefined {
+    const kindTime = event.kind === 'cme'
+        ? event.cme?.analysisTime
+        : event.kind === 'flare'
+            ? event.flare?.peakTime
+            : event.kind === 'hss'
+                ? event.hss?.eventTime
+                : event.kind === 'sep'
+                    ? event.sep?.eventTime
+                    : event.kind === 'ips'
+                        ? event.ips?.eventTime
+                        : undefined;
+    return firstValidTime(kindTime, event.startTime);
+}
+
+function eventFocusTime(event: domain.EventDTO): number {
+    const catalogTime = eventCatalogTime(event) ?? store.state.cursor;
+    let focusTime = catalogTime;
+    if (event.kind === 'cme' && event.cme?.directionKnown &&
+        event.cme.speedKms && event.cme.speedKms > 0) {
+        const travelAU = Math.max(0, SELECTED_CME_FOCUS_AU - INITIAL_CME_RADIUS_AU);
+        focusTime += travelAU * AU_KM / event.cme.speedKms * 1_000;
+    }
+    return Math.max(store.state.rangeStart, Math.min(store.state.rangeEnd, focusTime));
+}
+
+function firstValidTime(...values: Array<string | undefined>): number | undefined {
+    for (const value of values) {
+        if (!value) continue;
+        const parsed = Date.parse(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
 }
 
 async function loadDemo(): Promise<void> {
@@ -371,7 +447,7 @@ async function loadDemo(): Promise<void> {
             events: demo.events,
             telemetry: demo.telemetry,
             forecasts: demo.forecasts,
-            selectedEventID: demo.events.events[0]?.id,
+            selectedEventID: undefined,
             playing: false,
             status: demo.description,
         });
@@ -384,8 +460,13 @@ async function loadDemo(): Promise<void> {
 }
 
 async function loadRange(start: Date, end: Date): Promise<void> {
-    store.change({mode: 'replay', playing: false, status: 'Loading independent provider streams…'});
-    store.setRange(start.getTime(), end.getTime(), end.getTime());
+    store.change({
+        mode: 'replay',
+        selectedEventID: undefined,
+        playing: false,
+        status: 'Loading independent provider streams…',
+    });
+    store.setRange(start.getTime(), end.getTime(), start.getTime());
     const query = new domain.EventQuery({
         start: start.toISOString(),
         end: end.toISOString(),
@@ -406,7 +487,7 @@ async function loadRange(start: Date, end: Date): Promise<void> {
         backend.forecasts(range),
     ]);
     if (events.status === 'fulfilled') {
-        store.change({events: events.value, selectedEventID: events.value.events[0]?.id});
+        store.change({events: events.value, selectedEventID: undefined});
         reportIssues(events.value.issues);
     }
     else toast(`Events: ${errorText(events.reason)}`);
@@ -432,8 +513,10 @@ async function enterLive(): Promise<void> {
         toast('Live feeds require the Wails desktop runtime.');
         return;
     }
+    rememberReplay();
+    const requestVersion = ++liveRequestVersion;
     const end = new Date();
-    const start = new Date(end.getTime() - 7 * 86_400_000);
+    const start = new Date(end.getTime() - LIVE_EVENT_WINDOW_MS);
     store.change({mode: 'live', playing: false, status: 'Contacting NOAA SWPC…'});
     store.setLoading('live', true);
     const livePromise = backend.live();
@@ -443,31 +526,106 @@ async function enterLive(): Promise<void> {
         kinds: [...store.state.eventFilters],
     }));
     const [live, events] = await Promise.allSettled([livePromise, eventPromise]);
+    if (requestVersion !== liveRequestVersion || store.state.mode !== 'live') {
+        store.setLoading('live', false);
+        return;
+    }
     if (live.status === 'fulfilled') {
-        const latest = Date.parse(live.value.time) || end.getTime();
-        const recentStart = live.value.recent?.length ? Date.parse(live.value.recent[0].time) : latest - 6 * 3_600_000;
-        store.change({
-            live: live.value,
-            telemetry: live.value.recent?.length ? new domain.TelemetrySeriesDTO({
-                query: {start: new Date(recentStart).toISOString(), end: new Date(latest).toISOString()},
-                dataset: 'NOAA RTSW',
-                location: 'L1',
-                coordinateFrame: 'GSE/GSM',
-                cadenceSeconds: 60,
-                points: live.value.recent,
-                provenance: live.value.provenance?.[0],
-            }) : store.state.telemetry,
-            status: `Live NOAA observations · ${live.value.plasmaSource || 'active spacecraft'}`,
-        });
-        store.setRange(recentStart, latest, latest);
+        applyLiveSnapshot(
+            live.value,
+            `Live NOAA observations · ${live.value.plasmaSource || 'active spacecraft'}`,
+            end.getTime(),
+        );
         reportIssues(live.value.issues);
     } else {
         toast(errorText(live.reason));
         store.change({mode: 'replay', status: 'Live data unavailable; the existing replay remains visible.'});
     }
-    if (events.status === 'fulfilled') store.change({events: events.value});
+    if (events.status === 'fulfilled' && live.status === 'fulfilled') {
+        store.change({
+            events: events.value,
+            selectedEventID: preferredEventID(events.value.events, store.state.selectedEventID),
+        });
+        reportIssues(events.value.issues);
+    }
     store.setLoading('live', false);
     scheduleLiveRefresh();
+}
+
+function rememberReplay(): void {
+    if (store.state.mode !== 'replay') return;
+    replaySnapshot = {
+        events: store.state.events,
+        telemetry: store.state.telemetry,
+        forecasts: store.state.forecasts,
+        rangeStart: store.state.rangeStart,
+        rangeEnd: store.state.rangeEnd,
+        status: store.state.status,
+    };
+}
+
+function enterReplay(): void {
+    liveRequestVersion++;
+    if (liveTimer !== undefined) {
+        window.clearInterval(liveTimer);
+        liveTimer = undefined;
+    }
+    store.setLoading('live', false);
+    if (!replaySnapshot) {
+        store.change({
+            mode: 'replay',
+            live: undefined,
+            selectedEventID: undefined,
+            playing: false,
+            cursor: store.state.rangeStart,
+        });
+        return;
+    }
+    store.change({
+        ...replaySnapshot,
+        mode: 'replay',
+        live: undefined,
+        selectedEventID: undefined,
+        playing: false,
+        cursor: replaySnapshot.rangeStart,
+    });
+}
+
+function applyLiveSnapshot(snapshot: domain.LiveSnapshotDTO, status: string, fallbackEnd = Date.now()): void {
+    const timedPoints = (snapshot.recent ?? [])
+        .map((point) => ({point, time: Date.parse(point.time)}))
+        .filter((item) => Number.isFinite(item.time));
+    const snapshotTime = Date.parse(snapshot.time);
+    const observedTimes = timedPoints.map((item) => item.time);
+    if (Number.isFinite(snapshotTime)) observedTimes.push(snapshotTime);
+    const end = observedTimes.length ? Math.max(...observedTimes) : fallbackEnd;
+    const start = end - LIVE_TELEMETRY_WINDOW_MS;
+    const points = timedPoints
+        .filter((item) => item.time >= start && item.time <= end)
+        .map((item) => item.point);
+    const telemetry = new domain.TelemetrySeriesDTO({
+        query: {start: new Date(start).toISOString(), end: new Date(end).toISOString()},
+        dataset: 'NOAA RTSW',
+        location: 'L1',
+        coordinateFrame: 'GSE/GSM',
+        cadenceSeconds: 60,
+        points,
+        provenance: snapshot.provenance?.[0],
+    });
+    store.change({
+        live: snapshot,
+        telemetry,
+        rangeStart: start,
+        rangeEnd: end,
+        cursor: end,
+        playing: false,
+        status,
+    });
+}
+
+function preferredEventID(events: domain.EventDTO[], preferred?: string): string | undefined {
+    const visible = events.filter((event) => store.state.eventFilters.has(event.kind));
+    return visible.some((event) => event.id === preferred) ? preferred : visible[0]?.id;
 }
 
 function scheduleLiveRefresh(): void {
@@ -477,9 +635,8 @@ function scheduleLiveRefresh(): void {
         if (store.state.mode !== 'live') return;
         try {
             const snapshot = await backend.live();
-            const latest = Date.parse(snapshot.time);
-            store.change({live: snapshot, status: 'Live NOAA observations updated'});
-            if (Number.isFinite(latest)) store.setRange(latest - 6 * 3_600_000, latest, latest);
+            applyLiveSnapshot(snapshot, 'Live NOAA observations updated');
+            reportIssues(snapshot.issues);
         } catch (error) {
             store.change({status: `Live refresh failed · ${errorText(error)}`});
         }
@@ -503,13 +660,27 @@ function currentBundle(): domain.ExportBundle {
     });
 }
 
+function toggleReplayPlayback(): void {
+    if (store.state.mode === 'live') return;
+    if (store.state.playing) {
+        store.change({playing: false});
+        return;
+    }
+    store.change({
+        cursor: store.state.cursor >= store.state.rangeEnd
+            ? store.state.rangeStart
+            : store.state.cursor,
+        playing: true,
+    });
+}
+
 function wireInteractions(): void {
     required('demo-button').onclick = () => void loadDemo();
     required('guide-button').onclick = () => showGuide(0);
     required('reset-camera').onclick = () => scene.resetCamera();
     required('range-button').onclick = () => openRangeDialog();
     required('settings-button').onclick = () => openSettings();
-    required('play-button').onclick = () => store.change({playing: !store.state.playing});
+    required('play-button').onclick = () => toggleReplayPlayback();
     required<HTMLSelectElement>('playback-rate').onchange = (event) =>
         store.change({playbackRate: Number((event.target as HTMLSelectElement).value)});
     required<HTMLInputElement>('timeline').oninput = (event) => {
@@ -522,7 +693,7 @@ function wireInteractions(): void {
     document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((button) => {
         button.onclick = () => button.dataset.mode === 'live'
             ? void enterLive()
-            : store.change({mode: 'replay', playing: false, cursor: store.state.rangeEnd});
+            : enterReplay();
     });
     document.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((button) => {
         button.onclick = () => store.change({scale: button.dataset.scale as RadialScale});

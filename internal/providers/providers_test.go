@@ -103,6 +103,45 @@ func TestMergeRecentRTSWUsesActiveLatestSources(t *testing.T) {
 	}
 }
 
+func TestFillLiveSnapshotUsesNewestValueFromStaggeredStreams(t *testing.T) {
+	summarySpeed := 510.0
+	summaryField := 8.0
+	density := 3.5
+	pressure := 1.5
+	bz := -4.0
+	snapshot := domain.LiveSnapshotDTO{
+		SpeedKMS:         &summarySpeed,
+		FieldMagnitudeNT: &summaryField,
+		Recent: []domain.TelemetryPoint{
+			{
+				Time:          "2026-01-02T05:59:00Z",
+				SpeedKMS:      pointer(500.0),
+				DensityPerCM3: &density,
+				PressureNPa:   &pressure,
+			},
+			{
+				Time:    "2026-01-02T06:00:00Z",
+				BzGSMNT: &bz,
+			},
+		},
+	}
+
+	fillLiveSnapshotFromRecent(&snapshot)
+
+	if snapshot.DensityPerCM3 == nil || *snapshot.DensityPerCM3 != density {
+		t.Fatalf("expected latest plasma density, got %#v", snapshot.DensityPerCM3)
+	}
+	if snapshot.PressureNPa == nil || *snapshot.PressureNPa != pressure {
+		t.Fatalf("expected latest plasma pressure, got %#v", snapshot.PressureNPa)
+	}
+	if snapshot.BzGSMNT == nil || *snapshot.BzGSMNT != bz {
+		t.Fatalf("expected latest magnetic Bz, got %#v", snapshot.BzGSMNT)
+	}
+	if *snapshot.SpeedKMS != summarySpeed || *snapshot.FieldMagnitudeNT != summaryField {
+		t.Fatal("recent values must not replace newer compact-summary values")
+	}
+}
+
 func TestSWPCSummaryAcceptsOperationalObjectWithStringNumbers(t *testing.T) {
 	var speeds speedSummaryFeed
 	if err := json.Unmarshal(

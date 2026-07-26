@@ -13,7 +13,7 @@ import (
 func (s *Service) DemoScenario() domain.DemoScenarioDTO {
 	start := time.Date(2024, 5, 10, 0, 0, 0, 0, time.UTC)
 	end := start.Add(48 * time.Hour)
-	cursor := start.Add(25 * time.Hour)
+	cursor := start
 	latitude, longitude := 8.0, -12.0
 	width, speed := 48.0, 1180.0
 	flux := 3.4e-5
