@@ -2,6 +2,14 @@ import {domain} from '../wailsjs/go/models';
 
 export type Mode = 'live' | 'replay';
 export type RadialScale = 'linear' | 'compressed';
+export type TelemetryRequestPhase = 'idle' | 'loading' | 'complete' | 'error';
+
+export interface TelemetryRequestState {
+    phase: TelemetryRequestPhase;
+    start?: number;
+    end?: number;
+    error?: string;
+}
 
 export interface AppState {
     mode: Mode;
@@ -9,7 +17,7 @@ export interface AppState {
     live?: domain.LiveSnapshotDTO;
     events?: domain.EventSearchResult;
     telemetry?: domain.TelemetrySeriesDTO;
-    telemetryError?: string;
+    telemetryRequest: TelemetryRequestState;
     forecasts?: domain.ForecastResult;
     rangeStart: number;
     rangeEnd: number;
@@ -40,6 +48,7 @@ export class AppStore extends EventTarget {
             scale: 'linear',
             eventFilters: new Set(['cme', 'flare', 'hss', 'sep', 'ips', 'storm']),
             loading: new Set(),
+            telemetryRequest: {phase: 'idle'},
             status: 'Starting…',
         };
     }

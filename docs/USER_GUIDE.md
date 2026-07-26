@@ -2,16 +2,42 @@
 
 ## First launch
 
-The application opens a deterministic 48-hour CME-passage walkthrough. It
-requires no network and is explicitly classified as illustrative. The
-replay starts paused at the beginning of the interval with no event selected.
-The three-page guide explains data classes, replay time, and the Earth-condition
-charts.
+The desktop application opens by requesting the observed historical replay from
+11 November 2025 00:00 through 14 November 2025 23:59:59 UTC. DONKI events,
+routed OMNI telemetry, and available WSA-ENLIL forecasts load independently, so
+one unavailable stream does not hide successful data. The replay starts paused
+at the beginning of the interval with no event selected.
+
+If every historical stream fails, the application reports the failure and falls
+back to its deterministic, illustrative offline walkthrough. The browser-only
+preview also uses that walkthrough because it has no Wails provider bridge.
+**Load guided demo** switches to it explicitly at any time. The three-page guide
+explains data classes, replay time, and the Earth-condition charts.
 
 Drag to orbit the 3D camera, scroll to zoom, and use **Reset view** to return to
 the overview. Orbit drags do not select events; selection requires a short click
 on a visible event marker or propagation front while Replay is paused. Scene
 clicks during playback do not change the selection or replay time.
+
+## Workspace layout and messages
+
+Drag the vertical separators to resize the Event stream, heliosphere view, and
+Conditions inspector. Drag the horizontal separators to resize the telemetry
+graphs and the expanded Application messages log. A focused separator can also
+be moved with the arrow keys. Pane sizes and collapsed states are remembered
+across launches and can be restored with **Reset pane layout** in Settings.
+
+The telemetry graph pane starts open. Its header control collapses the timeline
+and charts. The Application messages pane below it starts collapsed and remains
+collapsed when new warnings or errors arrive; its badge reports unread messages
+and their highest severity. Opening it shows the session's running UTC log.
+Repeated adjacent messages are grouped, the log is bounded, and **Clear**
+removes its current entries. The log itself is not retained after the
+application closes. Popup notifications still report time-sensitive failures
+and action confirmations.
+
+The Conditions inspector scrolls independently when its content is taller than
+the available pane.
 
 ## Live and replay
 
@@ -38,13 +64,16 @@ A failed stream is reported without clearing successful data. Long telemetry
 requests automatically move from one-minute to five-minute and then hourly
 data.
 
-Date Range provider requests run concurrently. While the telemetry request is
-active, the charts and **Conditions near Earth** show a dedicated fetching
-indicator; telemetry from the previous range is not reused. The completed chart
-reports the returned UTC coverage, sample and gap counts, provider warnings,
-and whether the response came from cache. A partial result is final for that
-request—there is no hidden background fetch after the indicator and provider
-loading state disappear.
+Date Range provider requests run concurrently. Telemetry from the previous
+range is not reused. While the current request is active, the graph retains its
+requested UTC domain and metric frames while its header reports loading.
+Failures and provider details accumulate in Application messages rather than
+replacing the graph. A partial result renders every usable metric independently;
+if no samples are returned, the empty metric frames, cursor, and selected-event
+marker remain visible. The completed chart reports returned UTC coverage,
+sample and gap counts, provider warnings, and cache state. A partial result is
+final for that request—there is no hidden background fetch after provider
+loading state disappears.
 
 NASA's finalized OMNI observations can lag the current date. For the latest 90
 days, Replay also requests NOAA's active historical magnetic and plasma streams.
@@ -68,10 +97,10 @@ endpoint observation.
 Selecting an event pauses Replay and seeks to a useful view of that event:
 flare selections use the reported peak, directed CME selections advance the
 front into the heliosphere, and other event types use their catalog time. The
-camera’s zoom and orientation do not change. The selected event keeps its normal
-brightness while other active event geometry is shown at 60% brightness. Its
-catalog time is also marked on the telemetry charts. Live selections do not move
-the clock away from the newest observation.
+camera’s zoom and orientation do not change. The selected event is brightened
+toward a warm highlight while other active event geometry is reduced to 24%
+opacity. Its catalog time is also marked on the telemetry charts. Live
+selections do not move the clock away from the newest observation.
 
 Click the selected event again, press **Escape** when no dialog is open, or use
 **Clear selection** in the detail panel to clear it. Clicking empty space in the
@@ -107,8 +136,9 @@ Select an event to inspect its values and provenance:
 - **Derived**: a documented calculation, such as proton dynamic pressure.
 - **Illustrative**: explanatory geometry or demo data.
 
-The lower charts show solar-wind speed, proton density, and IMF Bz. Gaps are not
-interpolated by the backend. Bz remains labeled GSM, and local L1/bow-shock
+The lower charts show solar-wind speed, proton density, and IMF Bz. Each chart
+prints maximum, midpoint, and minimum values beside its vertical scale. Gaps are
+not interpolated by the backend. Bz remains labeled GSM, and local L1/bow-shock
 vectors are not painted across the entire heliosphere.
 
 ## Settings and credentials

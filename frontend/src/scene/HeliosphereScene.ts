@@ -5,11 +5,12 @@ import {AppState, telemetryAtCursor} from '../state';
 
 const AU_KM = 149_597_870.7;
 const SOLAR_RADIUS_AU = 695_700 / AU_KM;
+const SELECTED_EVENT_COLOR = new THREE.Color(0xfff1aa);
 
 interface EventVisual {
     root: THREE.Group;
     content: THREE.Group;
-    materials: Array<{material: THREE.Material; opacity: number}>;
+    materials: Array<{material: THREE.Material; opacity: number; color?: THREE.Color}>;
     event: domain.EventDTO;
 }
 
@@ -357,7 +358,14 @@ export class HeliosphereScene {
             content.traverse((object) => {
                 const material = (object as THREE.Mesh).material;
                 const items = Array.isArray(material) ? material : material ? [material] : [];
-                for (const item of items) materials.push({material: item, opacity: item.opacity});
+                for (const item of items) {
+                    const colored = item as THREE.Material & {color?: THREE.Color};
+                    materials.push({
+                        material: item,
+                        opacity: item.opacity,
+                        color: colored.color?.clone(),
+                    });
+                }
             });
             this.eventLayer.add(root);
             this.eventVisuals.push({root, content, materials, event});
@@ -385,9 +393,20 @@ export class HeliosphereScene {
         for (const {visual, selected, active} of statuses) {
             visual.content.visible = active;
             visual.root.visible = active;
-            const opacityFactor = hasVisibleSelection && !selected ? 0.6 : 1;
+            const dimmed = hasVisibleSelection && !selected;
+            const opacityFactor = dimmed ? 0.24 : hasVisibleSelection && selected ? 1.35 : 1;
+            visual.content.traverse((object) => {
+                object.renderOrder = hasVisibleSelection && selected ? 20 : 0;
+            });
             for (const item of visual.materials) {
-                item.material.opacity = item.opacity * opacityFactor;
+                item.material.opacity = Math.min(1, item.opacity * opacityFactor);
+                const colored = item.material as THREE.Material & {color?: THREE.Color};
+                if (item.color && colored.color) {
+                    colored.color.copy(item.color);
+                    if (hasVisibleSelection && selected) {
+                        colored.color.lerp(SELECTED_EVENT_COLOR, 0.38);
+                    }
+                }
             }
         }
     }

@@ -2,8 +2,10 @@ import './style.css';
 import './app.css';
 
 import {domain} from '../wailsjs/go/models';
+import {ActivityLog, ActivityLogView, ActivitySeverity} from './activity';
 import {backend} from './api';
 import {renderTelemetryCharts} from './charts';
+import {WorkspaceLayout} from './layout';
 import {HeliosphereScene} from './scene/HeliosphereScene';
 import {AppState, AppStore, RadialScale, telemetryAtCursor} from './state';
 import {utcInput, utcInputDate} from './utc';
@@ -11,6 +13,8 @@ import {utcInput, utcInputDate} from './utc';
 const HOUR_MS = 3_600_000;
 const LIVE_TELEMETRY_WINDOW_MS = 3 * HOUR_MS;
 const LIVE_EVENT_WINDOW_MS = 48 * HOUR_MS;
+const INITIAL_REPLAY_START = '2025-11-11T00:00:00Z';
+const INITIAL_REPLAY_END = '2025-11-14T23:59:59Z';
 const AU_KM = 149_597_870.7;
 const INITIAL_CME_RADIUS_AU = 21.5 * 695_700 / AU_KM;
 const SELECTED_CME_FOCUS_AU = 0.7;
@@ -36,7 +40,7 @@ app.innerHTML = `
     </div>
   </header>
 
-  <main class="workspace">
+  <main id="workspace" class="workspace">
     <aside class="event-panel panel">
       <div class="panel-heading">
         <div><span class="eyebrow">Phenomena</span><h2>Event stream</h2></div>
@@ -48,6 +52,9 @@ app.innerHTML = `
         <button id="demo-button" class="secondary-button">Load guided demo</button>
       </div>
     </aside>
+
+    <div id="event-resizer" class="pane-resizer vertical" role="separator"
+         aria-label="Resize event stream" aria-orientation="vertical" aria-valuemin="190"></div>
 
     <section class="viewport-panel">
       <div id="scene-host" class="scene-host" aria-label="Three-dimensional heliosphere view"></div>
@@ -71,6 +78,9 @@ app.innerHTML = `
       <div class="au-scale"><span>Sun</span><i></i><span id="scale-label">2 AU</span></div>
     </section>
 
+    <div id="inspector-resizer" class="pane-resizer vertical" role="separator"
+         aria-label="Resize conditions inspector" aria-orientation="vertical" aria-valuemin="220"></div>
+
     <aside class="inspector panel">
       <div class="panel-heading">
         <div><span class="eyebrow">At cursor</span><h2>Conditions near Earth</h2></div>
@@ -81,23 +91,50 @@ app.innerHTML = `
       <section id="forecast-card" class="forecast-card"></section>
     </aside>
 
-    <section class="bottom-dock panel">
-      <div class="timeline-controls">
-        <button id="play-button" class="play-button" aria-label="Play replay">▶</button>
-        <select id="playback-rate" aria-label="Playback speed">
-          <option value="60">60×</option>
-          <option value="600">600×</option>
-          <option value="3600" selected>1 hour/sec</option>
-          <option value="21600">6 hours/sec</option>
-          <option value="86400">1 day/sec</option>
-        </select>
-        <div class="timeline-track">
-          <input id="timeline" type="range" min="0" max="10000" value="10000" aria-label="Replay time"/>
-          <div class="timeline-labels"><span id="range-start">—</span><strong id="cursor-label">—</strong><span id="range-end">—</span></div>
+    <div id="graph-resizer" class="pane-resizer horizontal" role="separator"
+         aria-label="Resize telemetry graph pane" aria-orientation="horizontal" aria-valuemin="150"></div>
+
+    <section id="graph-pane" class="bottom-dock panel" aria-labelledby="graph-title">
+      <header class="dock-heading">
+        <div><span class="eyebrow">At Earth</span><h2 id="graph-title">Telemetry graphs</h2></div>
+        <div class="dock-heading-actions">
+          <span id="graph-status" class="dock-status" aria-live="polite">Ready</span>
+          <button id="graph-toggle" class="dock-toggle" type="button"></button>
         </div>
-        <button id="range-button" class="secondary-button">Date range</button>
+      </header>
+      <div class="graph-pane-body">
+        <div class="timeline-controls">
+          <button id="play-button" class="play-button" aria-label="Play replay">▶</button>
+          <select id="playback-rate" aria-label="Playback speed">
+            <option value="60">60×</option>
+            <option value="600">600×</option>
+            <option value="3600" selected>1 hour/sec</option>
+            <option value="21600">6 hours/sec</option>
+            <option value="86400">1 day/sec</option>
+          </select>
+          <div class="timeline-track">
+            <input id="timeline" type="range" min="0" max="10000" value="10000" aria-label="Replay time"/>
+            <div class="timeline-labels"><span id="range-start">—</span><strong id="cursor-label">—</strong><span id="range-end">—</span></div>
+          </div>
+          <button id="range-button" class="secondary-button">Date range</button>
+        </div>
+        <div id="charts" class="charts"></div>
       </div>
-      <div id="charts" class="charts"></div>
+    </section>
+
+    <div id="activity-resizer" class="pane-resizer horizontal" role="separator"
+         aria-label="Resize application message pane" aria-orientation="horizontal" aria-valuemin="110"></div>
+
+    <section id="activity-pane" class="activity-pane panel" aria-labelledby="activity-title">
+      <header class="dock-heading">
+        <div><span class="eyebrow">Running log</span><h2 id="activity-title">Application messages</h2></div>
+        <div class="dock-heading-actions">
+          <span id="activity-count" class="activity-badge info" hidden></span>
+          <button id="clear-activity" class="compact-button activity-clear" type="button">Clear</button>
+          <button id="activity-toggle" class="dock-toggle" type="button"></button>
+        </div>
+      </header>
+      <ol id="activity-list" class="activity-list" role="log" aria-live="off"></ol>
     </section>
   </main>
 
@@ -143,6 +180,7 @@ app.innerHTML = `
           <select id="default-scale"><option value="linear">Linear 0–2 AU</option><option value="compressed">Compressed inner heliosphere</option></select>
         </label>
         <label class="checkbox"><input id="reduced-motion" type="checkbox"/> Reduce animation</label>
+        <button id="reset-layout-button" type="button" class="secondary-button">Reset pane layout</button>
       </section>
       <section>
         <h3>Local data</h3>
@@ -171,11 +209,30 @@ app.innerHTML = `
 <div id="toast-region" class="toast-region" aria-live="polite"></div>`;
 
 const store = new AppStore();
+const activity = new ActivityLog();
+new ActivityLogView(
+    activity,
+    required<HTMLElement>('activity-list'),
+    required<HTMLElement>('activity-count'),
+    required<HTMLButtonElement>('clear-activity'),
+);
+const layout = new WorkspaceLayout(required<HTMLElement>('workspace'));
+activity.setOpen(!layout.state.logCollapsed);
+layout.addEventListener('change', () => {
+    const open = !layout.state.logCollapsed;
+    activity.setOpen(open);
+    if (open) {
+        requestAnimationFrame(() => {
+            const list = required<HTMLElement>('activity-list');
+            list.scrollTop = list.scrollHeight;
+        });
+    }
+});
 const sceneHost = required<HTMLElement>('scene-host');
 const scene = new HeliosphereScene(sceneHost);
 type ReplaySnapshot = Pick<
     AppState,
-    'events' | 'telemetry' | 'telemetryError' | 'forecasts' | 'rangeStart' | 'rangeEnd' | 'status'
+    'events' | 'telemetry' | 'telemetryRequest' | 'forecasts' | 'rangeStart' | 'rangeEnd' | 'status'
 >;
 let lastEventRender = '';
 let lastChartRender = '';
@@ -258,7 +315,7 @@ function providerLabel(): string {
 function renderReadouts(): void {
     const state = store.state;
     const telemetry = state.telemetry;
-    const telemetryLoading = state.loading.has('telemetry');
+    const telemetryLoading = state.telemetryRequest.phase === 'loading';
     const live = state.mode === 'live' ? state.live : undefined;
     const point = telemetryAtCursor(
         telemetry?.points ?? live?.recent,
@@ -275,7 +332,7 @@ function renderReadouts(): void {
         point?.source,
         live?.time,
         telemetryLoading,
-        state.telemetryError,
+        state.telemetryRequest.phase,
     ].join('|');
     if (signature === lastReadoutRender) return;
     lastReadoutRender = signature;
@@ -285,11 +342,9 @@ function renderReadouts(): void {
     conditionsTime.classList.toggle('loading', telemetryLoading);
     conditionsTime.textContent = telemetryLoading
         ? 'Fetching Replay telemetry…'
-        : state.telemetryError
-            ? 'Telemetry unavailable'
-            : Number.isFinite(parsedObservedTime)
-                ? `Observation ${longUTC(parsedObservedTime)}`
-                : 'No observation at cursor';
+        : Number.isFinite(parsedObservedTime)
+            ? `Observation ${longUTC(parsedObservedTime)}`
+            : 'No observation at cursor';
     const values: Array<{
         label: string;
         value?: number;
@@ -350,7 +405,9 @@ function renderEvents(): void {
     });
     const events = (state.events?.events ?? []).filter((event) => state.eventFilters.has(event.kind));
     required('event-count').textContent = String(events.length);
-    required('event-list').innerHTML = events.length ? events.map((event) => `
+    const eventList = required('event-list');
+    eventList.classList.toggle('has-selection', state.selectedEventID !== undefined);
+    eventList.innerHTML = events.length ? events.map((event) => `
       <button class="event-item ${event.id === state.selectedEventID ? 'selected' : ''}" data-event-id="${escapeHTML(event.id)}"
               aria-pressed="${event.id === state.selectedEventID}">
         <i class="event-symbol ${event.kind}">${symbolFor(event.kind)}</i>
@@ -426,7 +483,7 @@ function renderForecast(): void {
 function renderCharts(): void {
     const state = store.state;
     const telemetry = state.telemetry;
-    const telemetryLoading = state.loading.has('telemetry');
+    const telemetryLoading = state.telemetryRequest.phase === 'loading';
     const points = telemetry?.points ?? state.live?.recent ?? [];
     const event = selectedEvent();
     const markerTime = event ? eventCatalogTime(event) : undefined;
@@ -443,37 +500,14 @@ function renderCharts(): void {
         state.rangeEnd,
         Math.round(state.cursor / 60_000),
         telemetryLoading,
-        state.telemetryError,
+        state.telemetryRequest.phase,
+        state.telemetryRequest.error,
         event?.id,
         markerTime,
     ].join('|');
     if (signature === lastChartRender) return;
     lastChartRender = signature;
-    if (telemetryLoading) {
-        renderTelemetryState(
-            'loading',
-            'Fetching OMNI and recent NOAA telemetry…',
-            `${longUTC(state.rangeStart)} – ${longUTC(state.rangeEnd)}`,
-        );
-        return;
-    }
-    if (state.telemetryError) {
-        renderTelemetryState(
-            'error',
-            'Telemetry request finished with an error',
-            `${state.telemetryError} No background retry is running.`,
-        );
-        return;
-    }
-    if (!points.length && telemetry?.issues?.length) {
-        renderTelemetryState(
-            'error',
-            'Replay telemetry providers returned no usable data',
-            `${telemetry.issues.map((issue) =>
-                `${issue.provider}: ${issue.message}`).join(' ')} No background retry is running.`,
-        );
-        return;
-    }
+    renderGraphStatus(points.length, telemetry?.issues?.length ?? 0);
     renderTelemetryCharts(
         required('charts'),
         points,
@@ -493,12 +527,20 @@ function renderCharts(): void {
     );
 }
 
-function renderTelemetryState(kind: 'loading' | 'error', title: string, detail: string): void {
-    required('charts').innerHTML = `
-      <div class="telemetry-state ${kind}" role="status">
-        <i aria-hidden="true"></i>
-        <span><strong>${escapeHTML(title)}</strong><small>${escapeHTML(detail)}</small></span>
-      </div>`;
+function renderGraphStatus(pointCount: number, issueCount: number): void {
+    const request = store.state.telemetryRequest;
+    const status = required('graph-status');
+    const [label, kind] = request.phase === 'loading'
+        ? ['Loading', 'loading']
+        : request.phase === 'error'
+            ? ['No data', 'error']
+            : issueCount
+                ? ['Partial', 'warning']
+                : pointCount
+                    ? ['Ready', 'ready']
+                    : ['No samples', 'empty'];
+    status.textContent = label;
+    status.className = `dock-status ${kind}`;
 }
 
 function selectedEvent(): domain.EventDTO | undefined {
@@ -562,36 +604,45 @@ function firstValidTime(...values: Array<string | undefined>): number | undefine
 
 async function loadDemo(): Promise<void> {
     store.setLoading('demo', true);
+    store.change({telemetryRequest: {phase: 'loading'}});
+    publish('Loading the guided replay.', 'info', 'Replay');
     try {
         const demo = await backend.demo();
+        const start = Date.parse(demo.start);
+        const end = Date.parse(demo.end);
         store.change({
             mode: 'replay',
             events: demo.events,
             telemetry: demo.telemetry,
-            telemetryError: undefined,
+            telemetryRequest: {phase: 'complete', start, end},
             forecasts: demo.forecasts,
             selectedEventID: undefined,
             playing: false,
-            status: demo.description,
         });
-        store.setRange(Date.parse(demo.start), Date.parse(demo.end), Date.parse(demo.cursor));
+        store.setRange(start, end, Date.parse(demo.cursor));
+        setStatus(demo.description, 'Replay');
     } catch (error) {
+        store.change({telemetryRequest: {phase: 'error', error: errorText(error)}});
         fail(error);
     } finally {
         store.setLoading('demo', false);
     }
 }
 
-async function loadRange(start: Date, end: Date): Promise<void> {
+async function loadRange(start: Date, end: Date): Promise<number> {
     store.change({
         mode: 'replay',
         live: undefined,
         telemetry: undefined,
-        telemetryError: undefined,
+        telemetryRequest: {
+            phase: 'loading',
+            start: start.getTime(),
+            end: end.getTime(),
+        },
         selectedEventID: undefined,
         playing: false,
-        status: 'Loading independent provider streams…',
     });
+    setStatus('Loading independent provider streams…', 'Replay');
     store.setRange(start.getTime(), end.getTime(), start.getTime());
     const query = new domain.EventQuery({
         start: start.toISOString(),
@@ -615,31 +666,70 @@ async function loadRange(start: Date, end: Date): Promise<void> {
     if (events.status === 'fulfilled') {
         store.change({events: events.value, selectedEventID: undefined});
         reportIssues(events.value.issues);
+    } else {
+        publish(`Events: ${errorText(events.reason)}`, 'error', 'Events', true);
     }
-    else toast(`Events: ${errorText(events.reason)}`);
     if (telemetry.status === 'fulfilled') {
-        store.change({telemetry: telemetry.value, telemetryError: undefined});
+        store.change({
+            telemetry: telemetry.value,
+            telemetryRequest: {
+                phase: 'complete',
+                start: start.getTime(),
+                end: end.getTime(),
+            },
+        });
         reportIssues(telemetry.value.issues);
+        if (!telemetry.value.points?.length) {
+            publish('No telemetry samples were returned for the requested interval.', 'warning', 'Telemetry');
+        }
     } else {
         const message = errorText(telemetry.reason);
-        store.change({telemetryError: message});
-        toast(`Telemetry: ${message}`);
+        store.change({
+            telemetryRequest: {
+                phase: 'error',
+                start: start.getTime(),
+                end: end.getTime(),
+                error: message,
+            },
+        });
+        publish(`The current-range request failed: ${message}`, 'error', 'Telemetry', true);
     }
     if (forecasts.status === 'fulfilled') {
         store.change({forecasts: forecasts.value});
         reportIssues(forecasts.value.issues);
+    } else {
+        publish(`Forecast: ${errorText(forecasts.reason)}`, 'error', 'Forecast', true);
     }
-    else toast(`Forecast: ${errorText(forecasts.reason)}`);
     store.setLoading('events', false);
     store.setLoading('telemetry', false);
     store.setLoading('forecast', false);
     const successes = [events, telemetry, forecasts].filter((result) => result.status === 'fulfilled').length;
-    store.change({status: `${successes}/3 data streams loaded. Missing streams do not blank the view.`});
+    setStatus(`${successes}/3 data streams loaded. Missing streams do not blank the view.`, 'Replay');
+    return successes;
+}
+
+async function loadInitialReplay(): Promise<void> {
+    if (!backend.available()) {
+        await loadDemo();
+        return;
+    }
+    const successes = await loadRange(
+        new Date(INITIAL_REPLAY_START),
+        new Date(INITIAL_REPLAY_END),
+    );
+    if (successes > 0) return;
+    publish(
+        'All historical providers failed. Loading the offline guided replay instead.',
+        'warning',
+        'Replay',
+        true,
+    );
+    await loadDemo();
 }
 
 async function enterLive(): Promise<void> {
     if (!backend.available()) {
-        toast('Live feeds require the Wails desktop runtime.');
+        publish('Live feeds require the Wails desktop runtime.', 'warning', 'Live', true);
         return;
     }
     rememberReplay();
@@ -648,10 +738,9 @@ async function enterLive(): Promise<void> {
     const start = new Date(end.getTime() - LIVE_EVENT_WINDOW_MS);
     store.change({
         mode: 'live',
-        telemetryError: undefined,
         playing: false,
-        status: 'Contacting NOAA SWPC…',
     });
+    setStatus('Contacting NOAA SWPC…', 'Live');
     store.setLoading('live', true);
     const livePromise = backend.live();
     const eventPromise = backend.events(new domain.EventQuery({
@@ -672,8 +761,9 @@ async function enterLive(): Promise<void> {
         );
         reportIssues(live.value.issues);
     } else {
-        toast(errorText(live.reason));
-        store.change({mode: 'replay', status: 'Live data unavailable; the existing replay remains visible.'});
+        publish(errorText(live.reason), 'error', 'Live', true);
+        store.change({mode: 'replay'});
+        setStatus('Live data unavailable; the existing replay remains visible.', 'Live', 'warning');
     }
     if (events.status === 'fulfilled' && live.status === 'fulfilled') {
         store.change({
@@ -681,6 +771,8 @@ async function enterLive(): Promise<void> {
             selectedEventID: retainedEventID(events.value.events, store.state.selectedEventID),
         });
         reportIssues(events.value.issues);
+    } else if (events.status === 'rejected' && live.status === 'fulfilled') {
+        publish(`Events: ${errorText(events.reason)}`, 'error', 'Live', true);
     }
     store.setLoading('live', false);
     scheduleLiveRefresh();
@@ -691,7 +783,7 @@ function rememberReplay(): void {
     replaySnapshot = {
         events: store.state.events,
         telemetry: store.state.telemetry,
-        telemetryError: store.state.telemetryError,
+        telemetryRequest: store.state.telemetryRequest,
         forecasts: store.state.forecasts,
         rangeStart: store.state.rangeStart,
         rangeEnd: store.state.rangeEnd,
@@ -714,6 +806,7 @@ function enterReplay(): void {
             playing: false,
             cursor: store.state.rangeStart,
         });
+        setStatus('Replay mode ready.', 'Replay');
         return;
     }
     store.change({
@@ -724,6 +817,7 @@ function enterReplay(): void {
         playing: false,
         cursor: replaySnapshot.rangeStart,
     });
+    setStatus('Returned to the saved Replay view.', 'Replay');
 }
 
 function applyLiveSnapshot(snapshot: domain.LiveSnapshotDTO, status: string, fallbackEnd = Date.now()): void {
@@ -751,13 +845,13 @@ function applyLiveSnapshot(snapshot: domain.LiveSnapshotDTO, status: string, fal
     store.change({
         live: snapshot,
         telemetry,
-        telemetryError: undefined,
+        telemetryRequest: {phase: 'complete', start, end},
         rangeStart: start,
         rangeEnd: end,
         cursor: end,
         playing: false,
-        status,
     });
+    setStatus(status, 'Live');
 }
 
 function retainedEventID(events: domain.EventDTO[], preferred?: string): string | undefined {
@@ -778,7 +872,7 @@ function scheduleLiveRefresh(): void {
             applyLiveSnapshot(snapshot, 'Live NOAA observations updated');
             reportIssues(snapshot.issues);
         } catch (error) {
-            store.change({status: `Live refresh failed · ${errorText(error)}`});
+            setStatus(`Live refresh failed · ${errorText(error)}`, 'Live', 'error');
         }
     }, Math.max(30, seconds) * 1_000);
 }
@@ -845,7 +939,7 @@ function wireInteractions(): void {
         const start = utcInputDate(required<HTMLInputElement>('range-start-input').value);
         const end = utcInputDate(required<HTMLInputElement>('range-end-input').value);
         if (!start || !end || end <= start) {
-            toast('Choose an end time after the start time.');
+            publish('Choose an end time after the start time.', 'warning', 'Replay', true);
             return;
         }
         const checked = Array.from(document.querySelectorAll<HTMLInputElement>('#dialog-event-filters input:checked'))
@@ -863,6 +957,10 @@ function wireInteractions(): void {
     required('import-button').onclick = () => void importBundle();
     required('clear-cache-button').onclick = () => void clearCache();
     required('model-import-button').onclick = () => void inspectModel();
+    required('reset-layout-button').onclick = () => {
+        layout.reset();
+        publish('Pane sizes and collapse states restored to their defaults.', 'info', 'Layout', true);
+    };
     required<HTMLFormElement>('settings-form').addEventListener('submit', (event) => {
         const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
         if (submitter?.value !== 'default') return;
@@ -896,7 +994,7 @@ function openSettings(): void {
 
 async function saveSettings(): Promise<void> {
     if (!backend.available()) {
-        toast('Settings persistence requires the desktop runtime.');
+        publish('Settings persistence requires the desktop runtime.', 'warning', 'Settings', true);
         return;
     }
     const key = required<HTMLInputElement>('nasa-key').value.trim();
@@ -911,12 +1009,12 @@ async function saveSettings(): Promise<void> {
         if (store.state.bootstrap) store.state.bootstrap.settings = settings;
         store.change({
             scale: settings.preferredScale as RadialScale,
-            status: 'Settings saved securely by the Go backend.',
         });
+        setStatus('Settings saved securely by the Go backend.', 'Settings');
         document.documentElement.classList.toggle('reduced-motion', settings.reducedMotion);
         required<HTMLDialogElement>('settings-dialog').close();
     } catch (error) {
-        toast(errorText(error));
+        publish(errorText(error), 'error', 'Settings', true);
     }
 }
 
@@ -925,9 +1023,9 @@ async function clearCache(): Promise<void> {
         await backend.clearCache();
         if (store.state.bootstrap) store.state.bootstrap.cacheBytes = 0;
         required('cache-summary').textContent = 'Cache: empty';
-        toast('Cached provider responses cleared.');
+        publish('Cached provider responses cleared.', 'info', 'Cache', true);
     } catch (error) {
-        toast(errorText(error));
+        publish(errorText(error), 'error', 'Cache', true);
     }
 }
 
@@ -937,8 +1035,13 @@ async function inspectModel(): Promise<void> {
         required('model-status').textContent = result.ready
             ? `${result.name}: ${result.timeSteps} steps, ${result.gridShape?.join(' × ')}`
             : result.message || 'Model is not ready to render.';
+        publish(
+            result.ready ? `Inspected model metadata for ${result.name}.` : 'Model metadata is not ready to render.',
+            result.ready ? 'info' : 'warning',
+            'Model import',
+        );
     } catch (error) {
-        toast(errorText(error));
+        publish(errorText(error), 'error', 'Model import', true);
     }
 }
 
@@ -966,7 +1069,7 @@ async function importBundle(): Promise<void> {
                 generatedAt: bundle.createdAt,
             }),
             telemetry: bundle.telemetry,
-            telemetryError: undefined,
+            telemetryRequest: {phase: 'complete', start, end},
             forecasts: new domain.ForecastResult({
                 forecasts: importedForecasts,
                 generatedAt: bundle.createdAt,
@@ -976,24 +1079,24 @@ async function importBundle(): Promise<void> {
                 importedEvents,
                 typeof view.selectedEventID === 'string' ? view.selectedEventID : undefined,
             ),
-            status: 'Imported replay bundle.',
         });
         store.setRange(start, end, cursor);
+        setStatus('Imported replay bundle.', 'Import');
     } catch (error) {
-        toast(errorText(error));
+        publish(errorText(error), 'error', 'Import', true);
     }
 }
 
 async function runExport(action: () => Promise<string>, label: string): Promise<void> {
     if (!backend.available()) {
-        toast('File dialogs are available in the Wails desktop runtime.');
+        publish('File dialogs are available in the Wails desktop runtime.', 'warning', 'Export', true);
         return;
     }
     try {
         const path = await action();
-        if (path) toast(`${label}: ${path}`);
+        if (path) publish(`${label}: ${path}`, 'info', 'Export', true);
     } catch (error) {
-        toast(errorText(error));
+        publish(errorText(error), 'error', 'Export', true);
     }
 }
 
@@ -1038,7 +1141,7 @@ function closeGuide(): void {
     required('guide').classList.add('hidden');
 }
 
-function toast(message: string): void {
+function showToast(message: string): void {
     const item = document.createElement('div');
     item.className = 'toast';
     item.textContent = message;
@@ -1046,17 +1149,39 @@ function toast(message: string): void {
     window.setTimeout(() => item.remove(), 5_500);
 }
 
+function publish(
+    message: string,
+    severity: ActivitySeverity,
+    source: string,
+    popup = false,
+): void {
+    activity.publish({message, severity, source});
+    if (popup) showToast(message);
+}
+
+function setStatus(
+    message: string,
+    source = 'Application',
+    severity: ActivitySeverity = 'info',
+    popup = false,
+): void {
+    store.change({status: message});
+    publish(message, severity, source, popup);
+}
+
 function reportIssues(issues: domain.ProviderIssue[] | undefined): void {
     if (!issues?.length) return;
+    for (const issue of issues) {
+        publish(issue.message, 'warning', issue.provider);
+    }
     const shown = issues.slice(0, 3);
-    for (const issue of shown) toast(`${issue.provider}: ${issue.message}`);
-    if (issues.length > shown.length) toast(`${issues.length - shown.length} additional provider warnings`);
+    for (const issue of shown) showToast(`${issue.provider}: ${issue.message}`);
+    if (issues.length > shown.length) showToast(`${issues.length - shown.length} additional provider warnings`);
 }
 
 function fail(error: unknown): void {
     const message = errorText(error);
-    store.change({status: message});
-    toast(message);
+    setStatus(message, 'Application', 'error', true);
 }
 
 function errorText(error: unknown): string {
@@ -1128,13 +1253,18 @@ async function start(): Promise<void> {
         store.change({
             bootstrap,
             scale: bootstrap.settings.preferredScale as RadialScale,
-            status: backend.available() ? 'Backend ready. Loading the guided replay…' : 'Browser preview · built-in replay',
         });
+        setStatus(
+            backend.available()
+                ? 'Backend ready. Loading the 11–14 November 2025 historical replay…'
+                : 'Browser preview · built-in replay',
+            'Application',
+        );
         document.documentElement.classList.toggle('reduced-motion', bootstrap.settings.reducedMotion);
     } catch (error) {
         fail(error);
     }
-    await loadDemo();
+    await loadInitialReplay();
     if (!localStorage.getItem('solar-weather-guide') &&
         !new URLSearchParams(location.search).has('skipGuide')) {
         showGuide(0);

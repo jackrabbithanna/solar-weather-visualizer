@@ -71,6 +71,9 @@ func TestDemoScenarioIsSelfContained(t *testing.T) {
 	if demo.Cursor != demo.Start {
 		t.Fatalf("demo must start at the beginning: cursor %q, start %q", demo.Cursor, demo.Start)
 	}
+	if demo.Start != "2025-11-11T00:00:00Z" || demo.End != "2025-11-14T00:00:00Z" {
+		t.Fatalf("unexpected demo interval: %s through %s", demo.Start, demo.End)
+	}
 	cursor, err := domain.ParseTime(demo.Cursor)
 	if err != nil {
 		t.Fatal(err)

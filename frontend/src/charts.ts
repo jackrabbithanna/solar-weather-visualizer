@@ -44,22 +44,12 @@ export function renderTelemetryCharts(
             Number.isFinite(item.time) && item.time >= start && item.time <= end)
         .sort((left, right) => left.time - right.time)
         .map((item) => item.point);
-    if (!ranged.length) {
-        container.innerHTML = `
-          <div class="telemetry-state complete" role="status">
-            <i aria-hidden="true"></i>
-            <span>
-              <strong>No Replay telemetry returned for this interval</strong>
-              <small>Request complete · no background fetch is running</small>
-            </span>
-          </div>`;
-        return;
-    }
     const sampled = ranged.length > 700
         ? samplePoints(ranged, Math.ceil(ranged.length / 700))
         : ranged;
     const normalizedViewport = {...viewport, start, end};
-    container.innerHTML = coverageSummary(ranged, normalizedViewport) +
+    container.classList.toggle('without-coverage', !ranged.length);
+    container.innerHTML = (ranged.length ? coverageSummary(ranged, normalizedViewport) : '') +
         metrics.map((metric) => chart(metric, sampled, normalizedViewport)).join('');
 }
 
@@ -119,9 +109,9 @@ function chart(
     const values = points
         .map((point) => point[metric.key])
         .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-    if (!values.length) return '';
-    let minimum = Math.min(...values);
-    let maximum = Math.max(...values);
+    const hasValues = values.length > 0;
+    let minimum = hasValues ? Math.min(...values) : metric.zero ? -1 : 0;
+    let maximum = hasValues ? Math.max(...values) : 1;
     if (metric.zero) {
         minimum = Math.min(minimum, 0);
         maximum = Math.max(maximum, 0);
@@ -130,6 +120,7 @@ function chart(
         minimum -= 1;
         maximum += 1;
     }
+    const middle = (minimum + maximum) / 2;
     const span = Math.max(1, viewport.end - viewport.start);
     const x = (time: number): number =>
         padding.left + (time - viewport.start) / span * (width - padding.left - padding.right);
@@ -153,7 +144,7 @@ function chart(
         previousTime = time;
     }
     if (current) segments.push(current);
-    const zeroLine = metric.zero && minimum < 0 && maximum > 0
+    const zeroLine = hasValues && metric.zero && minimum < 0 && maximum > 0
         ? `<line x1="${padding.left}" x2="${width - padding.right}" y1="${y(0)}" y2="${y(0)}" class="zero-line"/>`
         : '';
     const cursorX = Math.max(padding.left, Math.min(width - padding.right, x(viewport.cursor)));
@@ -169,16 +160,30 @@ function chart(
             height - padding.bottom,
         )
         : '';
+    const scaleLabels = hasValues
+        ? [maximum, middle, minimum].map((value) => `<span>${format(value)}</span>`).join('')
+        : '<span>—</span><span>—</span><span>—</span>';
+    const scaleLines = [maximum, middle, minimum]
+        .map((value) => `<line x1="${padding.left}" x2="${width - padding.right}"
+            y1="${y(value)}" y2="${y(value)}"/>`)
+        .join('');
     return `
-      <article class="mini-chart">
-        <header><span>${metric.label}</span><small>${format(maximum)} / ${format(minimum)} ${metric.unit}</small></header>
-        <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
-             aria-label="${metric.label} chart for ${chartTime(viewport.start)} through ${chartTime(viewport.end)}">
-          ${zeroLine}
-          ${segments.map((path) => `<path d="${path}" fill="none" stroke="${metric.color}" vector-effect="non-scaling-stroke"/>`).join('')}
-          ${eventMarker}
-          <line x1="${cursorX}" x2="${cursorX}" y1="${padding.top}" y2="${height - padding.bottom}" class="cursor-line"/>
-        </svg>
+      <article class="mini-chart ${hasValues ? '' : 'no-samples'}">
+        <header><span>${metric.label}</span><small>${hasValues ? metric.unit : 'No samples'}</small></header>
+        <div class="chart-plot">
+          <div class="chart-y-scale" aria-hidden="true">${scaleLabels}</div>
+          <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
+               aria-label="${metric.label} chart for ${chartTime(viewport.start)} through ${chartTime(viewport.end)};
+                 scale ${format(minimum)} to ${format(maximum)} ${metric.unit}">
+            <g class="scale-grid">${scaleLines}</g>
+            ${hasValues ? '' : `<line x1="${padding.left}" x2="${width - padding.right}"
+              y1="${y(middle)}" y2="${y(middle)}" class="empty-baseline"/>`}
+            ${zeroLine}
+            ${segments.map((path) => `<path d="${path}" fill="none" stroke="${metric.color}" vector-effect="non-scaling-stroke"/>`).join('')}
+            ${eventMarker}
+            <line x1="${cursorX}" x2="${cursorX}" y1="${padding.top}" y2="${height - padding.bottom}" class="cursor-line"/>
+          </svg>
+        </div>
         <footer class="chart-domain"><span>${chartTime(viewport.start)}</span><span>${chartTime(viewport.end)}</span></footer>
       </article>`;
 }

@@ -11,8 +11,8 @@ import (
 // strong solar-wind interval, but it does not claim to reproduce a cataloged
 // event.
 func (s *Service) DemoScenario() domain.DemoScenarioDTO {
-	start := time.Date(2024, 5, 10, 0, 0, 0, 0, time.UTC)
-	end := start.Add(48 * time.Hour)
+	start := time.Date(2025, 11, 11, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2025, 11, 14, 0, 0, 0, 0, time.UTC)
 	cursor := start
 	latitude, longitude := 8.0, -12.0
 	width, speed := 48.0, 1180.0
@@ -50,9 +50,9 @@ func (s *Service) DemoScenario() domain.DemoScenarioDTO {
 		},
 	}
 
-	points := make([]domain.TelemetryPoint, 0, 193)
-	for index := 0; index <= 192; index++ {
-		at := start.Add(time.Duration(index) * 15 * time.Minute)
+	telemetryCadence := 15 * time.Minute
+	points := make([]domain.TelemetryPoint, 0, int(end.Sub(start)/telemetryCadence)+1)
+	for at := start; !at.After(end); at = at.Add(telemetryCadence) {
 		hours := at.Sub(start).Hours()
 		pulse := math.Exp(-math.Pow((hours-27)/5.5, 2))
 		speedValue := 385 + 390*pulse + 24*math.Sin(hours/2.7)
@@ -69,9 +69,9 @@ func (s *Service) DemoScenario() domain.DemoScenarioDTO {
 
 	arrival := start.Add(25 * time.Hour)
 	forecastSpeed := 720.0
-	forecastPoints := make([]domain.ForecastPoint, 0, 97)
-	for index := 0; index <= 96; index++ {
-		at := start.Add(time.Duration(index) * 30 * time.Minute)
+	forecastCadence := 30 * time.Minute
+	forecastPoints := make([]domain.ForecastPoint, 0, int(end.Sub(start)/forecastCadence)+1)
+	for at := start; !at.After(end); at = at.Add(forecastCadence) {
 		hours := at.Sub(arrival).Hours()
 		pulse := math.Exp(-math.Pow(hours/5, 2))
 		value := 390 + (forecastSpeed-390)*pulse
@@ -84,7 +84,7 @@ func (s *Service) DemoScenario() domain.DemoScenarioDTO {
 	domainAU := 2.0
 	return domain.DemoScenarioDTO{
 		Name:        "CME passage walkthrough",
-		Description: "A deterministic, illustrative 48-hour replay for learning the controls without a network connection.",
+		Description: "A deterministic, illustrative 72-hour replay for learning the controls without a network connection.",
 		Start:       domain.FormatTime(start),
 		End:         domain.FormatTime(end),
 		Cursor:      domain.FormatTime(cursor),

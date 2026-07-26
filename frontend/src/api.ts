@@ -78,10 +78,11 @@ export const backend = {
 };
 
 function browserDemo(): domain.DemoScenarioDTO {
-    const start = new Date('2024-05-10T00:00:00Z');
-    const end = new Date(start.getTime() + 48 * 3_600_000);
+    const start = new Date('2025-11-11T00:00:00Z');
+    const end = new Date('2025-11-14T00:00:00Z');
     const telemetry: domain.TelemetryPoint[] = [];
-    for (let index = 0; index <= 192; index++) {
+    const sampleCount = (end.getTime() - start.getTime()) / (15 * 60_000);
+    for (let index = 0; index <= sampleCount; index++) {
         const time = new Date(start.getTime() + index * 15 * 60_000);
         const hours = (time.getTime() - start.getTime()) / 3_600_000;
         const pulse = Math.exp(-Math.pow((hours - 27) / 5.5, 2));
@@ -108,7 +109,7 @@ function browserDemo(): domain.DemoScenarioDTO {
     };
     return new domain.DemoScenarioDTO({
         name: 'CME passage walkthrough',
-        description: 'A deterministic 48-hour replay for learning the controls.',
+        description: 'A deterministic 72-hour replay for learning the controls.',
         start: start.toISOString(),
         end: end.toISOString(),
         cursor: start.toISOString(),

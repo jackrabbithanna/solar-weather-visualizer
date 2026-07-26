@@ -103,11 +103,22 @@ cross-build validation.
 
 - `src/api.ts` isolates generated Wails calls and supplies a browser-preview
   demo.
-- `src/state.ts` owns replay time, filters, mode, selection, and loaded DTOs.
+- `src/state.ts` owns replay time, filters, mode, selection, loaded DTOs, and
+  typed telemetry request state.
+- `src/layout.ts` owns pane resizing, collapse behavior, accessibility, bounds,
+  and versioned local layout persistence.
+- `src/activity.ts` owns the bounded session activity stream and its DOM view;
+  messages are stored as text rather than injected markup.
 - `src/scene/HeliosphereScene.ts` owns Three.js resources, transforms, picking,
   CME/flare/HSS visuals, planets, and measured-condition particles.
-- `src/charts.ts` renders dependency-free telemetry SVGs.
-- `src/main.ts` composes panels, dialogs, workflows, exports, and guidance.
+- `src/charts.ts` renders dependency-free telemetry SVGs, including independent
+  empty metric frames that preserve the requested time domain.
+- `src/main.ts` composes the controllers, panels, dialogs, provider workflows,
+  exports, and guidance.
 
 Provider strings inserted into DOM markup are HTML-escaped. The WebView makes no
 provider request directly.
+
+Layout state is the only new persistent frontend state. The activity log remains
+in memory for the current session, while the latest message is also reflected
+in the footer. No frontend layout or logging operation crosses the Wails API.
