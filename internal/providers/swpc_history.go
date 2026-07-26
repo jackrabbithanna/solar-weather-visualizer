@@ -287,11 +287,13 @@ func decodeSWPCHistoryCSV(
 			point.ByGSMNT = csvFloat(row, index["by_gsm"])
 			point.BzGSMNT = csvFloat(row, index["bz_gsm"])
 			point.IMFSource = source
+			point.IMFAnchor = domain.SpatialAnchorSEMBL1
 		} else {
 			point.SpeedKMS = csvFloat(row, index["speed"])
 			point.DensityPerCM3 = csvFloat(row, index["density"])
 			point.TemperatureK = csvFloat(row, index["temperature"])
 			point.PlasmaSource = source
+			point.PlasmaAnchor = domain.SpatialAnchorSEMBL1
 			if point.SpeedKMS != nil && point.DensityPerCM3 != nil {
 				pressure := domain.DynamicPressureNPa(*point.DensityPerCM3, *point.SpeedKMS)
 				point.PressureNPa = &pressure

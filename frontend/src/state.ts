@@ -11,6 +11,8 @@ export interface TelemetryRequestState {
     error?: string;
 }
 
+export type EphemerisRequestState = TelemetryRequestState;
+
 export interface AppState {
     mode: Mode;
     bootstrap?: domain.BootstrapDTO;
@@ -19,6 +21,8 @@ export interface AppState {
     telemetry?: domain.TelemetrySeriesDTO;
     telemetryRequest: TelemetryRequestState;
     forecasts?: domain.ForecastResult;
+    ephemeris?: domain.EphemerisResult;
+    ephemerisRequest: EphemerisRequestState;
     rangeStart: number;
     rangeEnd: number;
     cursor: number;
@@ -49,6 +53,7 @@ export class AppStore extends EventTarget {
             eventFilters: new Set(['cme', 'flare', 'hss', 'sep', 'ips', 'storm']),
             loading: new Set(),
             telemetryRequest: {phase: 'idle'},
+            ephemerisRequest: {phase: 'idle'},
             status: 'Starting…',
         };
     }

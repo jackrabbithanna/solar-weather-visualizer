@@ -76,6 +76,7 @@ The facade currently exposes:
 - `RefreshLive`
 - `SearchEvents`
 - `LoadTelemetry`
+- `LoadEphemeris`
 - `LoadForecasts`
 - `GetSettings`
 - `SaveSettings`
@@ -104,13 +105,16 @@ cross-build validation.
 - `src/api.ts` isolates generated Wails calls and supplies a browser-preview
   demo.
 - `src/state.ts` owns replay time, filters, mode, selection, loaded DTOs, and
-  typed telemetry request state.
+  typed telemetry/ephemeris request state.
+- `src/scene/ephemeris.ts` owns exact state-vector interpolation, the bounded
+  JPL analytical fallback, HEEQ basis construction, and scene-axis mapping.
 - `src/layout.ts` owns pane resizing, collapse behavior, accessibility, bounds,
   and versioned local layout persistence.
 - `src/activity.ts` owns the bounded session activity stream and its DOM view;
   messages are stored as text rather than injected markup.
-- `src/scene/HeliosphereScene.ts` owns Three.js resources, transforms, picking,
-  CME/flare/HSS visuals, planets, and measured-condition particles.
+- `src/scene/HeliosphereScene.ts` owns Three.js resources, picking, accurate
+  planet/L1 trajectories, frame-correct CME/flare geometry, and local
+  Earth/L1 condition indicators.
 - `src/charts.ts` renders dependency-free telemetry SVGs, including independent
   empty metric frames that preserve the requested time domain.
 - `src/main.ts` composes the controllers, panels, dialogs, provider workflows,

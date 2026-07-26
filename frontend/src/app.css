@@ -500,6 +500,21 @@
     font-weight: 500;
 }
 
+.ephemeris-status,
+.scale-warning {
+    display: block;
+    margin-top: 4px;
+    font-size: 8px;
+    letter-spacing: .035em;
+}
+
+.ephemeris-status.exact { color: var(--teal); }
+.ephemeris-status.partial,
+.ephemeris-status.approximate,
+.scale-warning { color: var(--amber); }
+.ephemeris-status.loading { color: #8aa5b9; }
+.scale-warning[hidden] { display: none; }
+
 .scene-top-right {
     top: 14px;
     right: 14px;

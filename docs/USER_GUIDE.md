@@ -113,19 +113,32 @@ the Replay scene appears only while it is active at the current cursor time.
 ## The heliosphere view
 
 The scene covers a physical 0–2 AU and shows Mercury, Venus, Earth/L1, and Mars.
-Planet and Sun display radii are enlarged.
+Planet and Sun display radii are enlarged. Body centers and the
+Sun–Earth/Moon-barycenter L1 point come from cached NASA/JPL Horizons geometric
+state vectors and move continuously with the UTC replay cursor. Each orbit line
+shows one real trajectory revolution centered on the cursor.
 
 - **1:1 AU** uses linear radial distance.
 - **√ compressed** expands the inner heliosphere while keeping 0 and 2 AU
-  fixed. Time and propagation still use physical distance.
+  fixed. It preserves direction but not relative distance, so the scene marks
+  it as compressed. Time and propagation still use physical distance.
+
+The ephemeris badge reports whether all five positions are exact, partially
+exact, or using the analytical fallback. Approximate labels begin with `≈` and
+their orbit lines use an amber tint. A body is hidden if neither exact data nor
+the documented JPL fallback covers the selected date.
 
 An expanding CME cone appears only when DONKI supplies a usable analysis time,
 speed, latitude, longitude, and width. Its front is a constant-speed
 illustration. Unknown coordinates remain unknown.
 
 Flare markers appear only for parseable Stonyhurst source locations.
-High-speed-stream spirals are illustrative because DONKI does not supply full
-coronal-hole geometry.
+HSS, SEP, shock, and storm records remain in the catalog but do not receive
+invented 3D positions when their feeds omit spatial coordinates.
+
+Near-Earth solar-wind measurements appear only as local indicators. Routed OMNI
+values are anchored at Earth and NOAA values near L1; they are hidden in data
+gaps instead of being projected throughout the heliosphere.
 
 ## Reading the data
 
@@ -156,8 +169,11 @@ with an explicit stale label.
 
 - **Export image** saves the current Three.js canvas as PNG.
 - **Text** saves a readable event, telemetry, forecast, and provenance summary.
-- **Bundle** writes a gzip-compressed schema-versioned replay file.
+- **Bundle** writes a gzip-compressed schema-versioned replay file. Version 2
+  bundles include the exact ephemeris samples used by the scene.
 - **Import** restores a bundle and its view time, scale, data, and selection.
+  Version 1 bundles remain accepted and use the clearly marked analytical
+  ephemeris fallback.
 
 Files are created with owner-only permissions. Imports are size-limited and
 schema-validated.

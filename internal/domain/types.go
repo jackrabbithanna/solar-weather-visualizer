@@ -123,6 +123,46 @@ type TimeRange struct {
 	End   string `json:"end"`
 }
 
+// SpatialAnchor identifies the scene location where a local measurement
+// applies. It deliberately names only anchors the renderer can place from
+// ephemeris data.
+type SpatialAnchor string
+
+const (
+	SpatialAnchorEarth  SpatialAnchor = "earth"
+	SpatialAnchorSEMBL1 SpatialAnchor = "semb-l1"
+)
+
+type EphemerisSample struct {
+	Time       string  `json:"time"`
+	XAU        float64 `json:"xAu"`
+	YAU        float64 `json:"yAu"`
+	ZAU        float64 `json:"zAu"`
+	VXAUPerDay float64 `json:"vxAuPerDay"`
+	VYAUPerDay float64 `json:"vyAuPerDay"`
+	VZAUPerDay float64 `json:"vzAuPerDay"`
+}
+
+type BodyEphemerisDTO struct {
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Kind            string            `json:"kind"`
+	OrbitPeriodDays float64           `json:"orbitPeriodDays,omitempty"`
+	CoverageStart   string            `json:"coverageStart"`
+	CoverageEnd     string            `json:"coverageEnd"`
+	Samples         []EphemerisSample `json:"samples"`
+	Provenance      Provenance        `json:"provenance"`
+}
+
+type EphemerisResult struct {
+	Query           TimeRange          `json:"query"`
+	Center          string             `json:"center"`
+	CoordinateFrame string             `json:"coordinateFrame"`
+	Bodies          []BodyEphemerisDTO `json:"bodies"`
+	Issues          []ProviderIssue    `json:"issues,omitempty"`
+	GeneratedAt     string             `json:"generatedAt"`
+}
+
 type EventSearchResult struct {
 	Query       EventQuery      `json:"query"`
 	Events      []EventDTO      `json:"events"`
@@ -133,20 +173,22 @@ type EventSearchResult struct {
 }
 
 type TelemetryPoint struct {
-	Time             string   `json:"time"`
-	Source           string   `json:"source,omitempty"`
-	IMFSource        string   `json:"imfSource,omitempty"`
-	PlasmaSource     string   `json:"plasmaSource,omitempty"`
-	SpeedKMS         *float64 `json:"speedKms,omitempty"`
-	DensityPerCM3    *float64 `json:"densityPerCm3,omitempty"`
-	TemperatureK     *float64 `json:"temperatureK,omitempty"`
-	PressureNPa      *float64 `json:"pressureNPa,omitempty"`
-	FieldMagnitudeNT *float64 `json:"fieldMagnitudeNt,omitempty"`
-	BxGSENT          *float64 `json:"bxGseNt,omitempty"`
-	ByGSMNT          *float64 `json:"byGsmNt,omitempty"`
-	BzGSMNT          *float64 `json:"bzGsmNt,omitempty"`
-	Quality          *int     `json:"quality,omitempty"`
-	Active           *bool    `json:"active,omitempty"`
+	Time             string        `json:"time"`
+	Source           string        `json:"source,omitempty"`
+	IMFSource        string        `json:"imfSource,omitempty"`
+	PlasmaSource     string        `json:"plasmaSource,omitempty"`
+	IMFAnchor        SpatialAnchor `json:"imfAnchor,omitempty"`
+	PlasmaAnchor     SpatialAnchor `json:"plasmaAnchor,omitempty"`
+	SpeedKMS         *float64      `json:"speedKms,omitempty"`
+	DensityPerCM3    *float64      `json:"densityPerCm3,omitempty"`
+	TemperatureK     *float64      `json:"temperatureK,omitempty"`
+	PressureNPa      *float64      `json:"pressureNPa,omitempty"`
+	FieldMagnitudeNT *float64      `json:"fieldMagnitudeNt,omitempty"`
+	BxGSENT          *float64      `json:"bxGseNt,omitempty"`
+	ByGSMNT          *float64      `json:"byGsmNt,omitempty"`
+	BzGSMNT          *float64      `json:"bzGsmNt,omitempty"`
+	Quality          *int          `json:"quality,omitempty"`
+	Active           *bool         `json:"active,omitempty"`
 }
 
 type DataGap struct {
@@ -184,6 +226,8 @@ type LiveSnapshotDTO struct {
 	BzGSMNT          *float64         `json:"bzGsmNt,omitempty"`
 	PlasmaSource     string           `json:"plasmaSource,omitempty"`
 	IMFSource        string           `json:"imfSource,omitempty"`
+	PlasmaAnchor     SpatialAnchor    `json:"plasmaAnchor,omitempty"`
+	IMFAnchor        SpatialAnchor    `json:"imfAnchor,omitempty"`
 	Provenance       []Provenance     `json:"provenance"`
 	Recent           []TelemetryPoint `json:"recent,omitempty"`
 	XRay             []XRayPoint      `json:"xray,omitempty"`
@@ -284,6 +328,7 @@ type ExportBundle struct {
 	Events        []EventDTO          `json:"events,omitempty"`
 	Telemetry     *TelemetrySeriesDTO `json:"telemetry,omitempty"`
 	Forecasts     []ForecastDTO       `json:"forecasts,omitempty"`
+	Ephemeris     *EphemerisResult    `json:"ephemeris,omitempty"`
 }
 
 type DemoScenarioDTO struct {
@@ -295,6 +340,7 @@ type DemoScenarioDTO struct {
 	Events      EventSearchResult  `json:"events"`
 	Telemetry   TelemetrySeriesDTO `json:"telemetry"`
 	Forecasts   ForecastResult     `json:"forecasts"`
+	Ephemeris   *EphemerisResult   `json:"ephemeris,omitempty"`
 }
 
 type NCEIArchiveQuery struct {

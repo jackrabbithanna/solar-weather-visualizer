@@ -35,10 +35,12 @@ This document is updated as phases move from architecture to usable behavior.
 ## Phase 4 — Interactive visualization: complete
 
 - Vanilla TypeScript state and UI modules with a Three.js/WebGL renderer.
-- 0–2 AU solar system, linear/compressed scale, camera controls, picking,
-  physical replay clock, event filtering, and source inspection.
-- Ballistic CME fronts, flare pulses, illustrative HSS spirals, condition-driven
-  particles, SVG telemetry charts, and responsive panels.
+- 0–2 AU solar system with cached NASA/JPL Horizons state vectors, exact
+  position/velocity interpolation, one-revolution trajectories, dynamic L1,
+  linear/compressed scale, camera controls, and a physical replay clock.
+- Frame-correct ballistic CME fronts, flare pulses, spatial-truth-only event
+  geometry, local Earth/L1 condition indicators, SVG telemetry charts, and
+  responsive panels.
 - Guided onboarding and a deterministic browser/desktop demo.
 
 ## Phase 5 — Forecast and capture: complete for public feeds

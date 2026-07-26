@@ -284,6 +284,10 @@ func TestSWPCHistoryRequestsUTCAndMergesCSVStreams(t *testing.T) {
 		point.PlasmaSource != "NOAA SWPC source 4" {
 		t.Fatalf("unexpected source labels: %#v", point)
 	}
+	if point.IMFAnchor != domain.SpatialAnchorSEMBL1 ||
+		point.PlasmaAnchor != domain.SpatialAnchorSEMBL1 {
+		t.Fatalf("NOAA observations must remain anchored at L1: %#v", point)
+	}
 }
 
 func TestSWPCHistoryCSVRejectsFillValues(t *testing.T) {
@@ -437,6 +441,10 @@ func TestNormalizeHAPIConvertsFillToNull(t *testing.T) {
 	if len(points) != 1 || points[0].SpeedKMS != nil || points[0].DensityPerCM3 == nil ||
 		points[0].BzGSMNT == nil || *points[0].BzGSMNT != 0 {
 		t.Fatalf("fill normalization failed: %#v", points)
+	}
+	if points[0].IMFAnchor != domain.SpatialAnchorEarth ||
+		points[0].PlasmaAnchor != domain.SpatialAnchorEarth {
+		t.Fatalf("OMNI observations must remain anchored at Earth: %#v", points[0])
 	}
 }
 

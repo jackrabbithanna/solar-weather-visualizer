@@ -8,6 +8,7 @@ import {
     ImportBundle,
     ImportModel,
     LoadDemoScenario,
+    LoadEphemeris,
     LoadForecasts,
     LoadTelemetry,
     PreviewNCEIArchive,
@@ -65,6 +66,11 @@ export const backend = {
         return LoadForecasts(range);
     },
 
+    ephemeris(range: domain.TimeRange): Promise<domain.EphemerisResult> {
+        if (!hasWails()) return Promise.reject(new Error('Exact JPL ephemerides are available in the Wails desktop app.'));
+        return LoadEphemeris(range);
+    },
+
     live: RefreshLive,
     settings: GetSettings,
     saveSettings: SaveSettings,
@@ -92,6 +98,8 @@ function browserDemo(): domain.DemoScenarioDTO {
         telemetry.push(new domain.TelemetryPoint({
             time: time.toISOString(),
             source: 'DEMO',
+            imfAnchor: 'earth',
+            plasmaAnchor: 'earth',
             speedKms: speed,
             densityPerCm3: density,
             pressureNPa: density * 1.67262192369e-6 * speed * speed,

@@ -62,6 +62,7 @@ func (s *Service) DemoScenario() domain.DemoScenarioDTO {
 		pressureValue := domain.DynamicPressureNPa(densityValue, speedValue)
 		points = append(points, domain.TelemetryPoint{
 			Time: domain.FormatTime(at), Source: "DEMO", IMFSource: "DEMO", PlasmaSource: "DEMO",
+			IMFAnchor: domain.SpatialAnchorEarth, PlasmaAnchor: domain.SpatialAnchorEarth,
 			SpeedKMS: &speedValue, DensityPerCM3: &densityValue,
 			PressureNPa: &pressureValue, FieldMagnitudeNT: &fieldValue, BzGSMNT: &bzValue,
 		})

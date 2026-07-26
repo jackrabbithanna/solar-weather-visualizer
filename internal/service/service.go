@@ -21,13 +21,14 @@ const (
 )
 
 type Service struct {
-	Store   *store.Store
-	HTTP    *providers.CachedHTTP
-	DONKI   *providers.DonkiClient
-	SWPC    *providers.SWPCClient
-	OMNI    *providers.OMNIClient
-	History *providers.SWPCHistoryClient
-	Now     func() time.Time
+	Store    *store.Store
+	HTTP     *providers.CachedHTTP
+	DONKI    *providers.DonkiClient
+	SWPC     *providers.SWPCClient
+	OMNI     *providers.OMNIClient
+	History  *providers.SWPCHistoryClient
+	Horizons *providers.HorizonsClient
+	Now      func() time.Time
 
 	statusMu sync.Mutex
 	status   map[string]domain.ProviderStatus
@@ -44,17 +45,19 @@ func New() (*Service, error) {
 func NewWithStore(persistence *store.Store) *Service {
 	httpClient := providers.NewCachedHTTP(persistence)
 	return &Service{
-		Store:   persistence,
-		HTTP:    httpClient,
-		DONKI:   providers.NewDonkiClient(httpClient),
-		SWPC:    providers.NewSWPCClient(httpClient),
-		OMNI:    providers.NewOMNIClient(httpClient),
-		History: providers.NewSWPCHistoryClient(httpClient),
-		Now:     time.Now,
+		Store:    persistence,
+		HTTP:     httpClient,
+		DONKI:    providers.NewDonkiClient(httpClient),
+		SWPC:     providers.NewSWPCClient(httpClient),
+		OMNI:     providers.NewOMNIClient(httpClient),
+		History:  providers.NewSWPCHistoryClient(httpClient),
+		Horizons: providers.NewHorizonsClient(httpClient),
+		Now:      time.Now,
 		status: map[string]domain.ProviderStatus{
 			"NASA CCMC / DONKI": {Provider: "NASA CCMC / DONKI"},
 			"NOAA SWPC":         {Provider: "NOAA SWPC"},
 			"NASA CDAWeb":       {Provider: "NASA CDAWeb"},
+			"NASA/JPL Horizons": {Provider: "NASA/JPL Horizons"},
 		},
 	}
 }
@@ -242,6 +245,15 @@ func (s *Service) LoadTelemetry(
 		}
 	}
 	return providers.MergeReplayTelemetry(query, cadence, omniSeries, noaaSeries, issues), nil
+}
+
+func (s *Service) LoadEphemeris(
+	ctx context.Context,
+	timeRange domain.TimeRange,
+) (domain.EphemerisResult, error) {
+	result, err := s.Horizons.Ephemeris(ctx, timeRange)
+	s.recordStatus("NASA/JPL Horizons", err)
+	return result, err
 }
 
 func (s *Service) SearchEvents(

@@ -242,6 +242,12 @@ func (c *SWPCClient) Live(ctx context.Context) (domain.LiveSnapshotDTO, error) {
 	snapshot.Recent = recent
 	snapshot.PlasmaSource = plasmaSource
 	snapshot.IMFSource = imfSource
+	if plasmaSource != "" || snapshot.SpeedKMS != nil {
+		snapshot.PlasmaAnchor = domain.SpatialAnchorSEMBL1
+	}
+	if imfSource != "" || snapshot.FieldMagnitudeNT != nil {
+		snapshot.IMFAnchor = domain.SpatialAnchorSEMBL1
+	}
 	fillLiveSnapshotFromRecent(&snapshot)
 	snapshot.XRay = normalizeXRays(xrays, now)
 	for _, name := range []string{"speed-summary", "field-summary", "wind", "mag", "xray"} {
@@ -312,6 +318,7 @@ func mergeRecentRTSW(winds []rawWind, mags []rawMag, now time.Time) ([]domain.Te
 		}
 		point.Source = record.Source
 		point.PlasmaSource = record.Source
+		point.PlasmaAnchor = domain.SpatialAnchorSEMBL1
 		point.SpeedKMS = record.Speed
 		point.DensityPerCM3 = record.Density
 		point.TemperatureK = record.Temperature
@@ -341,6 +348,7 @@ func mergeRecentRTSW(winds []rawWind, mags []rawMag, now time.Time) ([]domain.Te
 			points[key] = point
 		}
 		point.IMFSource = record.Source
+		point.IMFAnchor = domain.SpatialAnchorSEMBL1
 		point.FieldMagnitudeNT = record.Magnitude
 		point.BxGSENT = record.BxGSE
 		point.ByGSMNT = record.ByGSM

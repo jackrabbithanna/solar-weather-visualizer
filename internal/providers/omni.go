@@ -299,6 +299,12 @@ func normalizeHAPI(response hapiResponse, level omniLevel) ([]domain.TelemetryPo
 		} else {
 			point.Source = point.PlasmaSource
 		}
+		if hasMagneticValues(point) {
+			point.IMFAnchor = domain.SpatialAnchorEarth
+		}
+		if hasPlasmaValues(point) {
+			point.PlasmaAnchor = domain.SpatialAnchorEarth
+		}
 		if hasTelemetryValues(point) {
 			points = append(points, point)
 		}

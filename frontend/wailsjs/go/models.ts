@@ -1,5 +1,101 @@
 export namespace domain {
 	
+	export class Provenance {
+	    provider: string;
+	    dataset: string;
+	    sourceUrl?: string;
+	    retrievedAt: string;
+	    observedAt?: string;
+	    coordinateFrame?: string;
+	    class: string;
+	    cached: boolean;
+	    stale: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Provenance(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.dataset = source["dataset"];
+	        this.sourceUrl = source["sourceUrl"];
+	        this.retrievedAt = source["retrievedAt"];
+	        this.observedAt = source["observedAt"];
+	        this.coordinateFrame = source["coordinateFrame"];
+	        this.class = source["class"];
+	        this.cached = source["cached"];
+	        this.stale = source["stale"];
+	    }
+	}
+	export class EphemerisSample {
+	    time: string;
+	    xAu: number;
+	    yAu: number;
+	    zAu: number;
+	    vxAuPerDay: number;
+	    vyAuPerDay: number;
+	    vzAuPerDay: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EphemerisSample(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.time = source["time"];
+	        this.xAu = source["xAu"];
+	        this.yAu = source["yAu"];
+	        this.zAu = source["zAu"];
+	        this.vxAuPerDay = source["vxAuPerDay"];
+	        this.vyAuPerDay = source["vyAuPerDay"];
+	        this.vzAuPerDay = source["vzAuPerDay"];
+	    }
+	}
+	export class BodyEphemerisDTO {
+	    id: string;
+	    name: string;
+	    kind: string;
+	    orbitPeriodDays?: number;
+	    coverageStart: string;
+	    coverageEnd: string;
+	    samples: EphemerisSample[];
+	    provenance: Provenance;
+	
+	    static createFrom(source: any = {}) {
+	        return new BodyEphemerisDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.orbitPeriodDays = source["orbitPeriodDays"];
+	        this.coverageStart = source["coverageStart"];
+	        this.coverageEnd = source["coverageEnd"];
+	        this.samples = this.convertValues(source["samples"], EphemerisSample);
+	        this.provenance = this.convertValues(source["provenance"], Provenance);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ProviderStatus {
 	    provider: string;
 	    available: boolean;
@@ -133,6 +229,60 @@ export namespace domain {
 	        this.end = source["end"];
 	        this.reason = source["reason"];
 	    }
+	}
+	export class TimeRange {
+	    start: string;
+	    end: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TimeRange(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start = source["start"];
+	        this.end = source["end"];
+	    }
+	}
+	export class EphemerisResult {
+	    query: TimeRange;
+	    center: string;
+	    coordinateFrame: string;
+	    bodies: BodyEphemerisDTO[];
+	    issues?: ProviderIssue[];
+	    generatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EphemerisResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.query = this.convertValues(source["query"], TimeRange);
+	        this.center = source["center"];
+	        this.coordinateFrame = source["coordinateFrame"];
+	        this.bodies = this.convertValues(source["bodies"], BodyEphemerisDTO);
+	        this.issues = this.convertValues(source["issues"], ProviderIssue);
+	        this.generatedAt = source["generatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ForecastPoint {
 	    time: string;
@@ -277,6 +427,8 @@ export namespace domain {
 	    source?: string;
 	    imfSource?: string;
 	    plasmaSource?: string;
+	    imfAnchor?: string;
+	    plasmaAnchor?: string;
 	    speedKms?: number;
 	    densityPerCm3?: number;
 	    temperatureK?: number;
@@ -298,6 +450,8 @@ export namespace domain {
 	        this.source = source["source"];
 	        this.imfSource = source["imfSource"];
 	        this.plasmaSource = source["plasmaSource"];
+	        this.imfAnchor = source["imfAnchor"];
+	        this.plasmaAnchor = source["plasmaAnchor"];
 	        this.speedKms = source["speedKms"];
 	        this.densityPerCm3 = source["densityPerCm3"];
 	        this.temperatureK = source["temperatureK"];
@@ -390,34 +544,6 @@ export namespace domain {
 	        this.code = source["code"];
 	        this.message = source["message"];
 	        this.retryable = source["retryable"];
-	    }
-	}
-	export class Provenance {
-	    provider: string;
-	    dataset: string;
-	    sourceUrl?: string;
-	    retrievedAt: string;
-	    observedAt?: string;
-	    coordinateFrame?: string;
-	    class: string;
-	    cached: boolean;
-	    stale: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new Provenance(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.provider = source["provider"];
-	        this.dataset = source["dataset"];
-	        this.sourceUrl = source["sourceUrl"];
-	        this.retrievedAt = source["retrievedAt"];
-	        this.observedAt = source["observedAt"];
-	        this.coordinateFrame = source["coordinateFrame"];
-	        this.class = source["class"];
-	        this.cached = source["cached"];
-	        this.stale = source["stale"];
 	    }
 	}
 	export class StormData {
@@ -641,6 +767,7 @@ export namespace domain {
 	    events: EventSearchResult;
 	    telemetry: TelemetrySeriesDTO;
 	    forecasts: ForecastResult;
+	    ephemeris?: EphemerisResult;
 	
 	    static createFrom(source: any = {}) {
 	        return new DemoScenarioDTO(source);
@@ -656,6 +783,7 @@ export namespace domain {
 	        this.events = this.convertValues(source["events"], EventSearchResult);
 	        this.telemetry = this.convertValues(source["telemetry"], TelemetrySeriesDTO);
 	        this.forecasts = this.convertValues(source["forecasts"], ForecastResult);
+	        this.ephemeris = this.convertValues(source["ephemeris"], EphemerisResult);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -679,6 +807,8 @@ export namespace domain {
 	
 	
 	
+	
+	
 	export class ExportBundle {
 	    schemaVersion: number;
 	    createdAt: string;
@@ -686,6 +816,7 @@ export namespace domain {
 	    events?: EventDTO[];
 	    telemetry?: TelemetrySeriesDTO;
 	    forecasts?: ForecastDTO[];
+	    ephemeris?: EphemerisResult;
 	
 	    static createFrom(source: any = {}) {
 	        return new ExportBundle(source);
@@ -699,6 +830,7 @@ export namespace domain {
 	        this.events = this.convertValues(source["events"], EventDTO);
 	        this.telemetry = this.convertValues(source["telemetry"], TelemetrySeriesDTO);
 	        this.forecasts = this.convertValues(source["forecasts"], ForecastDTO);
+	        this.ephemeris = this.convertValues(source["ephemeris"], EphemerisResult);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -755,6 +887,8 @@ export namespace domain {
 	    bzGsmNt?: number;
 	    plasmaSource?: string;
 	    imfSource?: string;
+	    plasmaAnchor?: string;
+	    imfAnchor?: string;
 	    provenance: Provenance[];
 	    recent?: TelemetryPoint[];
 	    xray?: XRayPoint[];
@@ -775,6 +909,8 @@ export namespace domain {
 	        this.bzGsmNt = source["bzGsmNt"];
 	        this.plasmaSource = source["plasmaSource"];
 	        this.imfSource = source["imfSource"];
+	        this.plasmaAnchor = source["plasmaAnchor"];
+	        this.imfAnchor = source["imfAnchor"];
 	        this.provenance = this.convertValues(source["provenance"], Provenance);
 	        this.recent = this.convertValues(source["recent"], TelemetryPoint);
 	        this.xray = this.convertValues(source["xray"], XRayPoint);
@@ -930,20 +1066,7 @@ export namespace domain {
 	
 	
 	
-	export class TimeRange {
-	    start: string;
-	    end: string;
 	
-	    static createFrom(source: any = {}) {
-	        return new TimeRange(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.start = source["start"];
-	        this.end = source["end"];
-	    }
-	}
 
 }
 

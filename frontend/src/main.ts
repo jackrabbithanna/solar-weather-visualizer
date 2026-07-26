@@ -7,12 +7,15 @@ import {backend} from './api';
 import {renderTelemetryCharts} from './charts';
 import {WorkspaceLayout} from './layout';
 import {HeliosphereScene} from './scene/HeliosphereScene';
+import {BODY_IDS, bodyPositionAt} from './scene/ephemeris';
 import {AppState, AppStore, RadialScale, telemetryAtCursor} from './state';
 import {utcInput, utcInputDate} from './utc';
 
 const HOUR_MS = 3_600_000;
 const LIVE_TELEMETRY_WINDOW_MS = 3 * HOUR_MS;
 const LIVE_EVENT_WINDOW_MS = 48 * HOUR_MS;
+const LIVE_EPHEMERIS_GUARD_MS = 30 * 24 * HOUR_MS;
+const LIVE_EPHEMERIS_REFRESH_MARGIN_MS = 7 * 24 * HOUR_MS;
 const INITIAL_REPLAY_START = '2025-11-11T00:00:00Z';
 const INITIAL_REPLAY_END = '2025-11-14T23:59:59Z';
 const AU_KM = 149_597_870.7;
@@ -61,6 +64,8 @@ app.innerHTML = `
       <div class="scene-top-left glass">
         <span id="scene-mode" class="eyebrow">REPLAY · ILLUSTRATIVE</span>
         <strong id="scene-time">—</strong>
+        <span id="ephemeris-status" class="ephemeris-status approximate">≈ Approximate ephemeris</span>
+        <span id="scale-warning" class="scale-warning" hidden>Distances compressed</span>
       </div>
       <div class="scene-top-right glass">
         <button id="reset-camera" class="compact-button">Reset view</button>
@@ -153,7 +158,7 @@ app.innerHTML = `
 <dialog id="range-dialog">
   <form method="dialog" class="dialog-card" id="range-form">
     <header><div><span class="eyebrow">Historical search</span><h2>Explore a UTC interval</h2></div><button value="cancel" class="icon-button">×</button></header>
-    <p>DONKI events, routed OMNI/NOAA observations, and available WSA-ENLIL forecasts load independently. All values below are interpreted as UTC.</p>
+    <p>JPL ephemerides, DONKI events, routed OMNI/NOAA observations, and available WSA-ENLIL forecasts load independently. All values below are interpreted as UTC.</p>
     <label>Start (UTC) <input id="range-start-input" type="datetime-local" step="60" required/></label>
     <label>End (UTC) <input id="range-end-input" type="datetime-local" step="60" required/></label>
     <fieldset>
@@ -232,7 +237,9 @@ const sceneHost = required<HTMLElement>('scene-host');
 const scene = new HeliosphereScene(sceneHost);
 type ReplaySnapshot = Pick<
     AppState,
-    'events' | 'telemetry' | 'telemetryRequest' | 'forecasts' | 'rangeStart' | 'rangeEnd' | 'status'
+    'events' | 'telemetry' | 'telemetryRequest' | 'forecasts' | 'ephemeris' |
+    'ephemerisRequest' | 'rangeStart' | 'rangeEnd' | 'cursor' | 'selectedEventID' |
+    'status'
 >;
 let lastEventRender = '';
 let lastChartRender = '';
@@ -242,6 +249,7 @@ let lastForecastRender = '';
 let renderQueued = false;
 let liveTimer: number | undefined;
 let liveRequestVersion = 0;
+let lastLiveEphemerisAttempt = 0;
 let replaySnapshot: ReplaySnapshot | undefined;
 
 const eventKinds = [
@@ -280,6 +288,7 @@ function renderUI(): void {
     required('status-message').textContent = state.status;
     required('scene-time').textContent = longUTC(state.cursor);
     required('scene-mode').textContent = `${state.mode.toUpperCase()} · ${state.mode === 'live' ? 'OBSERVED' : 'MIXED DATA'}`;
+    renderEphemerisStatus();
     required('range-start').textContent = shortUTC(state.rangeStart);
     required('range-end').textContent = shortUTC(state.rangeEnd);
     required('cursor-label').textContent = longUTC(state.cursor);
@@ -296,12 +305,42 @@ function renderUI(): void {
     document.querySelectorAll<HTMLElement>('[data-scale]').forEach((button) =>
         button.classList.toggle('active', button.dataset.scale === state.scale));
     required('scale-label').textContent = state.scale === 'linear' ? '2 AU' : '2 AU · compressed';
+    required('scale-warning').toggleAttribute('hidden', state.scale !== 'compressed');
 
     renderReadouts();
     renderEvents();
     renderDetail();
     renderForecast();
     renderCharts();
+}
+
+function renderEphemerisStatus(): void {
+    const status = required('ephemeris-status');
+    if (store.state.ephemerisRequest.phase === 'loading') {
+        status.textContent = 'Loading JPL ephemeris…';
+        status.className = 'ephemeris-status loading';
+        return;
+    }
+    const exactCount = Object.values(BODY_IDS)
+        .filter((id) => bodyPositionAt(store.state.ephemeris, id, store.state.cursor)?.exact)
+        .length;
+    if (exactCount === Object.keys(BODY_IDS).length) {
+        const datasets = new Set(
+            store.state.ephemeris?.bodies.map((body) => body.provenance?.dataset).filter(Boolean),
+        );
+        status.textContent = datasets.size === 1
+            ? [...datasets][0] as string
+            : 'NASA/JPL Horizons';
+        status.className = 'ephemeris-status exact';
+        return;
+    }
+    if (exactCount > 0) {
+        status.textContent = `${exactCount}/${Object.keys(BODY_IDS).length} exact · remainder approximate`;
+        status.className = 'ephemeris-status partial';
+        return;
+    }
+    status.textContent = '≈ JPL analytical fallback';
+    status.className = 'ephemeris-status approximate';
 }
 
 function providerLabel(): string {
@@ -604,7 +643,10 @@ function firstValidTime(...values: Array<string | undefined>): number | undefine
 
 async function loadDemo(): Promise<void> {
     store.setLoading('demo', true);
-    store.change({telemetryRequest: {phase: 'loading'}});
+    store.change({
+        telemetryRequest: {phase: 'loading'},
+        ephemerisRequest: {phase: 'loading'},
+    });
     publish('Loading the guided replay.', 'info', 'Replay');
     try {
         const demo = await backend.demo();
@@ -616,13 +658,20 @@ async function loadDemo(): Promise<void> {
             telemetry: demo.telemetry,
             telemetryRequest: {phase: 'complete', start, end},
             forecasts: demo.forecasts,
+            ephemeris: demo.ephemeris,
+            ephemerisRequest: demo.ephemeris
+                ? {phase: 'complete', start, end}
+                : {phase: 'error', start, end, error: 'Built-in analytical fallback'},
             selectedEventID: undefined,
             playing: false,
         });
         store.setRange(start, end, Date.parse(demo.cursor));
         setStatus(demo.description, 'Replay');
     } catch (error) {
-        store.change({telemetryRequest: {phase: 'error', error: errorText(error)}});
+        store.change({
+            telemetryRequest: {phase: 'error', error: errorText(error)},
+            ephemerisRequest: {phase: 'error', error: errorText(error)},
+        });
         fail(error);
     } finally {
         store.setLoading('demo', false);
@@ -634,7 +683,13 @@ async function loadRange(start: Date, end: Date): Promise<number> {
         mode: 'replay',
         live: undefined,
         telemetry: undefined,
+        ephemeris: undefined,
         telemetryRequest: {
+            phase: 'loading',
+            start: start.getTime(),
+            end: end.getTime(),
+        },
+        ephemerisRequest: {
             phase: 'loading',
             start: start.getTime(),
             end: end.getTime(),
@@ -658,10 +713,12 @@ async function loadRange(start: Date, end: Date): Promise<number> {
     store.setLoading('events', true);
     store.setLoading('telemetry', true);
     store.setLoading('forecast', true);
-    const [events, telemetry, forecasts] = await Promise.allSettled([
+    store.setLoading('ephemeris', true);
+    const [events, telemetry, forecasts, ephemeris] = await Promise.allSettled([
         backend.events(query),
         backend.telemetry(telemetryQuery),
         backend.forecasts(range),
+        backend.ephemeris(range),
     ]);
     if (events.status === 'fulfilled') {
         store.change({events: events.value, selectedEventID: undefined});
@@ -700,12 +757,38 @@ async function loadRange(start: Date, end: Date): Promise<number> {
     } else {
         publish(`Forecast: ${errorText(forecasts.reason)}`, 'error', 'Forecast', true);
     }
+    if (ephemeris.status === 'fulfilled') {
+        store.change({
+            ephemeris: ephemeris.value,
+            ephemerisRequest: {
+                phase: 'complete',
+                start: start.getTime(),
+                end: end.getTime(),
+            },
+        });
+        reportIssues(ephemeris.value.issues);
+    } else {
+        const message = errorText(ephemeris.reason);
+        store.change({
+            ephemeris: undefined,
+            ephemerisRequest: {
+                phase: 'error',
+                start: start.getTime(),
+                end: end.getTime(),
+                error: message,
+            },
+        });
+        publish(`Exact ephemeris unavailable; using the marked analytical fallback. ${message}`,
+            'warning', 'Ephemeris', true);
+    }
     store.setLoading('events', false);
     store.setLoading('telemetry', false);
     store.setLoading('forecast', false);
-    const successes = [events, telemetry, forecasts].filter((result) => result.status === 'fulfilled').length;
-    setStatus(`${successes}/3 data streams loaded. Missing streams do not blank the view.`, 'Replay');
-    return successes;
+    store.setLoading('ephemeris', false);
+    const results = [events, telemetry, forecasts, ephemeris];
+    const successes = results.filter((result) => result.status === 'fulfilled').length;
+    setStatus(`${successes}/4 data streams loaded. Missing streams use explicit gaps or fallbacks.`, 'Replay');
+    return [events, telemetry, forecasts].filter((result) => result.status === 'fulfilled').length;
 }
 
 async function loadInitialReplay(): Promise<void> {
@@ -736,21 +819,36 @@ async function enterLive(): Promise<void> {
     const requestVersion = ++liveRequestVersion;
     const end = new Date();
     const start = new Date(end.getTime() - LIVE_EVENT_WINDOW_MS);
+    const ephemerisRange = liveEphemerisRange(end.getTime());
     store.change({
         mode: 'live',
         playing: false,
+        ephemeris: undefined,
+        ephemerisRequest: {
+            phase: 'loading',
+            start: Date.parse(ephemerisRange.start),
+            end: Date.parse(ephemerisRange.end),
+        },
     });
     setStatus('Contacting NOAA SWPC…', 'Live');
     store.setLoading('live', true);
+    store.setLoading('ephemeris', true);
     const livePromise = backend.live();
     const eventPromise = backend.events(new domain.EventQuery({
         start: start.toISOString(),
         end: end.toISOString(),
         kinds: [...store.state.eventFilters],
     }));
-    const [live, events] = await Promise.allSettled([livePromise, eventPromise]);
+    lastLiveEphemerisAttempt = Date.now();
+    const ephemerisPromise = backend.ephemeris(ephemerisRange);
+    const [live, events, ephemeris] = await Promise.allSettled([
+        livePromise,
+        eventPromise,
+        ephemerisPromise,
+    ]);
     if (requestVersion !== liveRequestVersion || store.state.mode !== 'live') {
         store.setLoading('live', false);
+        store.setLoading('ephemeris', false);
         return;
     }
     if (live.status === 'fulfilled') {
@@ -762,7 +860,12 @@ async function enterLive(): Promise<void> {
         reportIssues(live.value.issues);
     } else {
         publish(errorText(live.reason), 'error', 'Live', true);
-        store.change({mode: 'replay'});
+        store.change({
+            ...replaySnapshot,
+            mode: 'replay',
+            live: undefined,
+            playing: false,
+        });
         setStatus('Live data unavailable; the existing replay remains visible.', 'Live', 'warning');
     }
     if (events.status === 'fulfilled' && live.status === 'fulfilled') {
@@ -774,8 +877,32 @@ async function enterLive(): Promise<void> {
     } else if (events.status === 'rejected' && live.status === 'fulfilled') {
         publish(`Events: ${errorText(events.reason)}`, 'error', 'Live', true);
     }
+    if (ephemeris.status === 'fulfilled' && live.status === 'fulfilled') {
+        store.change({
+            ephemeris: ephemeris.value,
+            ephemerisRequest: {
+                phase: 'complete',
+                start: Date.parse(ephemerisRange.start),
+                end: Date.parse(ephemerisRange.end),
+            },
+        });
+        reportIssues(ephemeris.value.issues);
+    } else if (ephemeris.status === 'rejected' && live.status === 'fulfilled') {
+        const message = errorText(ephemeris.reason);
+        store.change({
+            ephemerisRequest: {
+                phase: 'error',
+                start: Date.parse(ephemerisRange.start),
+                end: Date.parse(ephemerisRange.end),
+                error: message,
+            },
+        });
+        publish(`Exact live ephemeris unavailable; using the marked analytical fallback. ${message}`,
+            'warning', 'Ephemeris', true);
+    }
     store.setLoading('live', false);
-    scheduleLiveRefresh();
+    store.setLoading('ephemeris', false);
+    if (live.status === 'fulfilled') scheduleLiveRefresh();
 }
 
 function rememberReplay(): void {
@@ -785,8 +912,12 @@ function rememberReplay(): void {
         telemetry: store.state.telemetry,
         telemetryRequest: store.state.telemetryRequest,
         forecasts: store.state.forecasts,
+        ephemeris: store.state.ephemeris,
+        ephemerisRequest: store.state.ephemerisRequest,
         rangeStart: store.state.rangeStart,
         rangeEnd: store.state.rangeEnd,
+        cursor: store.state.cursor,
+        selectedEventID: store.state.selectedEventID,
         status: store.state.status,
     };
 }
@@ -871,15 +1002,68 @@ function scheduleLiveRefresh(): void {
             const snapshot = await backend.live();
             applyLiveSnapshot(snapshot, 'Live NOAA observations updated');
             reportIssues(snapshot.issues);
+            void ensureLiveEphemeris(store.state.cursor);
         } catch (error) {
             setStatus(`Live refresh failed · ${errorText(error)}`, 'Live', 'error');
         }
     }, Math.max(30, seconds) * 1_000);
 }
 
+function liveEphemerisRange(cursor: number): domain.TimeRange {
+    return new domain.TimeRange({
+        start: new Date(cursor - LIVE_EPHEMERIS_GUARD_MS).toISOString(),
+        end: new Date(cursor + LIVE_EPHEMERIS_GUARD_MS).toISOString(),
+    });
+}
+
+async function ensureLiveEphemeris(cursor: number): Promise<void> {
+    if (!backend.available() || store.state.mode !== 'live' ||
+        store.state.ephemerisRequest.phase === 'loading') return;
+    const coverageEnd = Date.parse(store.state.ephemeris?.query?.end ?? '');
+    if (Number.isFinite(coverageEnd) &&
+        coverageEnd - cursor > LIVE_EPHEMERIS_REFRESH_MARGIN_MS) return;
+    if (Date.now() - lastLiveEphemerisAttempt < 15 * 60_000) return;
+    lastLiveEphemerisAttempt = Date.now();
+    const range = liveEphemerisRange(cursor);
+    store.setLoading('ephemeris', true);
+    store.change({
+        ephemerisRequest: {
+            phase: 'loading',
+            start: Date.parse(range.start),
+            end: Date.parse(range.end),
+        },
+    });
+    try {
+        const ephemeris = await backend.ephemeris(range);
+        if (store.state.mode !== 'live') return;
+        store.change({
+            ephemeris,
+            ephemerisRequest: {
+                phase: 'complete',
+                start: Date.parse(range.start),
+                end: Date.parse(range.end),
+            },
+        });
+        reportIssues(ephemeris.issues);
+    } catch (error) {
+        if (store.state.mode === 'live') {
+            store.change({
+                ephemerisRequest: {
+                    phase: 'error',
+                    start: Date.parse(range.start),
+                    end: Date.parse(range.end),
+                    error: errorText(error),
+                },
+            });
+        }
+    } finally {
+        store.setLoading('ephemeris', false);
+    }
+}
+
 function currentBundle(): domain.ExportBundle {
     return new domain.ExportBundle({
-        schemaVersion: 1,
+        schemaVersion: 2,
         createdAt: new Date().toISOString(),
         view: {
             cursor: new Date(store.state.cursor).toISOString(),
@@ -891,6 +1075,7 @@ function currentBundle(): domain.ExportBundle {
         events: store.state.events?.events ?? [],
         telemetry: store.state.telemetry,
         forecasts: store.state.forecasts?.forecasts ?? [],
+        ephemeris: store.state.ephemeris,
     });
 }
 
@@ -1070,6 +1255,10 @@ async function importBundle(): Promise<void> {
             }),
             telemetry: bundle.telemetry,
             telemetryRequest: {phase: 'complete', start, end},
+            ephemeris: bundle.ephemeris,
+            ephemerisRequest: bundle.ephemeris
+                ? {phase: 'complete', start, end}
+                : {phase: 'error', start, end, error: 'Imported v1 bundle uses analytical fallback'},
             forecasts: new domain.ForecastResult({
                 forecasts: importedForecasts,
                 generatedAt: bundle.createdAt,

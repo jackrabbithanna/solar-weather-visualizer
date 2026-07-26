@@ -179,6 +179,7 @@ func mergeMagneticValues(destination *domain.TelemetryPoint, source domain.Telem
 	destination.ByGSMNT = source.ByGSMNT
 	destination.BzGSMNT = source.BzGSMNT
 	destination.IMFSource = source.IMFSource
+	destination.IMFAnchor = source.IMFAnchor
 }
 
 func mergePlasmaValues(destination *domain.TelemetryPoint, source domain.TelemetryPoint) {
@@ -190,6 +191,7 @@ func mergePlasmaValues(destination *domain.TelemetryPoint, source domain.Telemet
 	destination.TemperatureK = source.TemperatureK
 	destination.PressureNPa = source.PressureNPa
 	destination.PlasmaSource = source.PlasmaSource
+	destination.PlasmaAnchor = source.PlasmaAnchor
 }
 
 func mergePointMetadata(destination *domain.TelemetryPoint, source domain.TelemetryPoint) {

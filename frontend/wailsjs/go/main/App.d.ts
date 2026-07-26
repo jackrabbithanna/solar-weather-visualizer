@@ -22,6 +22,8 @@ export function ImportModel():Promise<domain.ModelImportSummary>;
 
 export function LoadDemoScenario():Promise<domain.DemoScenarioDTO>;
 
+export function LoadEphemeris(arg1:domain.TimeRange):Promise<domain.EphemerisResult>;
+
 export function LoadForecasts(arg1:domain.TimeRange):Promise<domain.ForecastResult>;
 
 export function LoadTelemetry(arg1:domain.TelemetryQuery):Promise<domain.TelemetrySeriesDTO>;

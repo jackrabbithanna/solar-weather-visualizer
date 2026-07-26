@@ -7,6 +7,8 @@ conditions from the Sun to 2 AU. The view combines:
   WSA-ENLIL metadata.
 - NOAA SWPC real-time solar wind, IMF, GOES X-ray, and ENLIL Earth time series.
 - NASA CDAWeb OMNI historical observations with automatic cadence selection.
+- NASA/JPL Horizons geometric ephemerides for Mercury through Mars and the
+  Sun–Earth/Moon-barycenter L1 point.
 - A deterministic offline walkthrough for learning the controls.
 
 Every record and visual is labeled observed, forecast, derived, or illustrative.
@@ -29,6 +31,7 @@ npm --prefix frontend run dev
 
 ```sh
 npm --prefix frontend run build
+npm --prefix frontend test
 env GOCACHE=/tmp/solar-weather-visualizer-go-cache go test ./...
 env GOCACHE=/tmp/solar-weather-visualizer-go-cache CGO_ENABLED=0 go test ./...
 ```

@@ -75,6 +75,13 @@ func (a *App) LoadForecasts(timeRange domain.TimeRange) (domain.ForecastResult, 
 	return a.service.LoadForecasts(a.context(), timeRange)
 }
 
+func (a *App) LoadEphemeris(timeRange domain.TimeRange) (domain.EphemerisResult, error) {
+	if err := a.ready(); err != nil {
+		return domain.EphemerisResult{}, err
+	}
+	return a.service.LoadEphemeris(a.context(), timeRange)
+}
+
 func (a *App) GetSettings() (domain.SettingsDTO, error) {
 	if err := a.ready(); err != nil {
 		return domain.SettingsDTO{}, err
@@ -147,7 +154,7 @@ func (a *App) ExportText(bundle domain.ExportBundle) (string, error) {
 
 func (a *App) ExportBundle(bundle domain.ExportBundle) (string, error) {
 	if bundle.SchemaVersion == 0 {
-		bundle.SchemaVersion = 1
+		bundle.SchemaVersion = 2
 	}
 	if bundle.CreatedAt == "" {
 		bundle.CreatedAt = domain.FormatTime(time.Now())
@@ -209,7 +216,7 @@ func (a *App) ImportBundle() (domain.ExportBundle, error) {
 	if err := json.NewDecoder(reader).Decode(&bundle); err != nil {
 		return domain.ExportBundle{}, fmt.Errorf("decode bundle: %w", err)
 	}
-	if bundle.SchemaVersion != 1 {
+	if bundle.SchemaVersion != 1 && bundle.SchemaVersion != 2 {
 		return domain.ExportBundle{}, fmt.Errorf("unsupported bundle schema %d", bundle.SchemaVersion)
 	}
 	return bundle, nil
@@ -350,6 +357,14 @@ func formatBundleText(bundle domain.ExportBundle) string {
 			len(bundle.Telemetry.Points),
 			bundle.Telemetry.Dataset,
 			bundle.Telemetry.CoordinateFrame,
+		))
+	}
+	if bundle.Ephemeris != nil {
+		builder.WriteString(fmt.Sprintf(
+			"\nEphemeris bodies: %d  frame %s  center %s\n",
+			len(bundle.Ephemeris.Bodies),
+			bundle.Ephemeris.CoordinateFrame,
+			bundle.Ephemeris.Center,
 		))
 	}
 	builder.WriteString(fmt.Sprintf("\nForecast runs: %d\n", len(bundle.Forecasts)))

@@ -24,8 +24,9 @@ describe the current architecture and implemented behavior.
 
 The end-to-end core is usable: normalized providers, secure settings, stale
 cache fallback, live and historical workflows, guided offline replay, Three.js
-layers, charts, provenance inspection, and exports. Exact NCEI daily-file
-import and full ENLIL cube rendering remain feature-gated; see the roadmap.
+layers, cached JPL ephemerides, frame-correct event geometry, charts, provenance
+inspection, and exports. Exact NCEI daily-file import and full ENLIL cube
+rendering remain feature-gated; see the roadmap.
 
 ## Documentation policy
 

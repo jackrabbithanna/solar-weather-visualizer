@@ -15,8 +15,10 @@ All external requests originate from Go, use HTTPS provider endpoints, set a
 bounded timeout and response-size limit, and normalize data before it crosses
 the Wails bridge. The frontend does not receive raw provider bodies.
 
-One provider failure does not authorize substituting another data class or
-inventing coordinates. A stale cached response is explicitly marked stale.
+One provider failure does not authorize silently substituting another data
+class or inventing coordinates. A stale cached response is explicitly marked
+stale, and the bounded JPL analytical ephemeris fallback is visibly identified
+as approximate.
 
 ## Local files
 
@@ -24,9 +26,10 @@ Settings, cache entries, screenshots, summaries, and replay bundles are created
 with owner-only permissions. Settings and cache writes use a temporary file,
 sync, close, and atomic rename.
 
-Replay imports are capped at 512 MiB, accept JSON or gzip JSON, and require
-schema version 1. Model metadata JSON is capped at 8 MiB. NetCDF decoding is
-disabled in the current build.
+Replay imports are capped at 512 MiB and accept JSON or gzip JSON. Schema v2
+includes ephemeris samples; schema v1 remains accepted with an analytical
+fallback. Model metadata JSON is capped at 8 MiB. NetCDF decoding is disabled
+in the current build.
 
 ## Dependency boundary
 

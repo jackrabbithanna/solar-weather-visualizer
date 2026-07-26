@@ -20,6 +20,7 @@ wails dev
 
 ```sh
 npm --prefix frontend run build
+npm --prefix frontend test
 env GOCACHE=/tmp/solar-weather-visualizer-go-cache go test ./...
 ```
 

@@ -42,6 +42,10 @@ export function LoadDemoScenario() {
   return window['go']['main']['App']['LoadDemoScenario']();
 }
 
+export function LoadEphemeris(arg1) {
+  return window['go']['main']['App']['LoadEphemeris'](arg1);
+}
+
 export function LoadForecasts(arg1) {
   return window['go']['main']['App']['LoadForecasts'](arg1);
 }

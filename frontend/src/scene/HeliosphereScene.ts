@@ -2,6 +2,13 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
 import {domain} from '../../wailsjs/go/models';
 import {AppState, telemetryAtCursor} from '../state';
+import {
+    BODY_IDS,
+    bodyPositionAt,
+    eclipticToScene,
+    heeqDirectionToEcliptic,
+    orbitPositionsAt,
+} from './ephemeris';
 
 const AU_KM = 149_597_870.7;
 const SOLAR_RADIUS_AU = 695_700 / AU_KM;
@@ -15,20 +22,13 @@ interface EventVisual {
 }
 
 interface PlanetVisual {
+    id: string;
     name: string;
-    elements: OrbitalElements;
-    mesh: THREE.Mesh;
-    label: THREE.Sprite;
-}
-
-interface OrbitalElements {
-    semiMajorAU: number;
-    eccentricity: number;
-    inclinationDeg: number;
-    meanLongitudeDeg: number;
-    longitudePerihelionDeg: number;
-    longitudeNodeDeg: number;
     periodDays: number;
+    mesh: THREE.Mesh;
+    exactLabel: THREE.Sprite;
+    approximateLabel: THREE.Sprite;
+    orbit: THREE.Line;
 }
 
 export class HeliosphereScene {
@@ -38,18 +38,19 @@ export class HeliosphereScene {
     private readonly controls: OrbitControls;
     private readonly root = new THREE.Group();
     private readonly eventLayer = new THREE.Group();
-    private readonly windParticles: THREE.Points;
     private readonly planets: PlanetVisual[] = [];
     private readonly eventVisuals: EventVisual[] = [];
-    private readonly windPhysicalRadii = new Float32Array(900);
-    private readonly windAngles = new Float32Array(900);
+    private readonly plasmaIndicator: THREE.Sprite;
+    private readonly imfIndicator: THREE.Sprite;
     private readonly raycaster = new THREE.Raycaster();
     private readonly pointer = new THREE.Vector2();
+    private l1Marker?: THREE.Mesh;
+    private l1ExactLabel?: THREE.Sprite;
+    private l1ApproximateLabel?: THREE.Sprite;
     private state?: AppState;
     private eventsReference?: domain.EventSearchResult;
     private filterSignature = '';
     private scaleValue?: string;
-    private lastWindTime = performance.now();
     private selectedEventID?: string;
     private pickOrigin?: {pointerId: number; x: number; y: number};
     onEventSelected?: (id: string) => void;
@@ -83,7 +84,7 @@ export class HeliosphereScene {
         this.addSun();
         this.addReferenceGrid();
         this.addPlanets();
-        this.windParticles = this.addWindParticles();
+        [this.plasmaIndicator, this.imfIndicator] = this.addLocalTelemetryIndicators();
 
         this.renderer.domElement.addEventListener('pointerdown', (event) => this.beginPick(event));
         this.renderer.domElement.addEventListener('pointerup', (event) => this.completePick(event));
@@ -102,15 +103,15 @@ export class HeliosphereScene {
         this.filterSignature = nextFilterSignature;
         this.scaleValue = state.scale;
         if (eventsChanged) this.rebuildEvents();
-        if (scaleChanged) this.updateOrbitGeometry();
+        if (scaleChanged) this.updateScaleGeometry();
         this.selectedEventID = state.selectedEventID;
     }
 
-    render(time: number): void {
+    render(_time: number): void {
         if (!this.state) return;
         this.updatePlanets(this.state.cursor);
         this.updateEventVisuals(this.state.cursor);
-        this.updateWind(time);
+        this.updateLocalTelemetry(this.state.cursor);
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
     }
@@ -205,34 +206,23 @@ export class HeliosphereScene {
     }
 
     private addPlanets(): void {
-        const definitions: Array<[string, OrbitalElements, number]> = [
-            ['Mercury', {
-                semiMajorAU: 0.38709927, eccentricity: 0.20563593, inclinationDeg: 7.00497902,
-                meanLongitudeDeg: 252.2503235, longitudePerihelionDeg: 77.45779628,
-                longitudeNodeDeg: 48.33076593, periodDays: 87.969,
-            }, 0xa8a7a3],
-            ['Venus', {
-                semiMajorAU: 0.72333566, eccentricity: 0.00677672, inclinationDeg: 3.39467605,
-                meanLongitudeDeg: 181.9790995, longitudePerihelionDeg: 131.60246718,
-                longitudeNodeDeg: 76.67984255, periodDays: 224.701,
-            }, 0xe0b478],
-            ['Earth', {
-                semiMajorAU: 1.00000261, eccentricity: 0.01671123, inclinationDeg: -0.00001531,
-                meanLongitudeDeg: 100.46457166, longitudePerihelionDeg: 102.93768193,
-                longitudeNodeDeg: 0, periodDays: 365.256,
-            }, 0x43a9ff],
-            ['Mars', {
-                semiMajorAU: 1.52371034, eccentricity: 0.0933941, inclinationDeg: 1.84969142,
-                meanLongitudeDeg: -4.55343205, longitudePerihelionDeg: -23.94362959,
-                longitudeNodeDeg: 49.55953891, periodDays: 686.98,
-            }, 0xd36a4a],
+        const definitions: Array<[string, string, number, number]> = [
+            [BODY_IDS.Mercury, 'Mercury', 87.969, 0xa8a7a3],
+            [BODY_IDS.Venus, 'Venus', 224.701, 0xe0b478],
+            [BODY_IDS.Earth, 'Earth', 365.256, 0x43a9ff],
+            [BODY_IDS.Mars, 'Mars', 686.98, 0xd36a4a],
         ];
-        for (const [name, elements, color] of definitions) {
-            const orbit = new THREE.LineLoop(
-                this.planetOrbitGeometry(elements),
+        for (const [id, name, periodDays, color] of definitions) {
+            const orbitGeometry = new THREE.BufferGeometry();
+            orbitGeometry.setAttribute(
+                'position',
+                new THREE.BufferAttribute(new Float32Array(256 * 3), 3)
+                    .setUsage(THREE.DynamicDrawUsage),
+            );
+            const orbit = new THREE.Line(
+                orbitGeometry,
                 new THREE.LineBasicMaterial({color: 0x35536b, transparent: true, opacity: 0.34}),
             );
-            orbit.userData.planetOrbit = elements;
             this.root.add(orbit);
             const mesh = new THREE.Mesh(
                 new THREE.SphereGeometry(name === 'Earth' ? 0.014 : 0.011, 20, 14),
@@ -240,46 +230,56 @@ export class HeliosphereScene {
             );
             mesh.userData.label = name;
             this.root.add(mesh);
-            const label = makeLabel(name, name === 'Earth' ? '#aee8ff' : '#b8c8d8');
-            this.root.add(label);
-            this.planets.push({name, elements, mesh, label});
+            const exactLabel = makeLabel(name, name === 'Earth' ? '#aee8ff' : '#b8c8d8');
+            const approximateLabel = makeLabel(`≈ ${name}`, '#f0bd73');
+            this.root.add(exactLabel, approximateLabel);
+            this.planets.push({
+                id,
+                name,
+                periodDays,
+                mesh,
+                exactLabel,
+                approximateLabel,
+                orbit,
+            });
         }
-        const l1 = makeLabel('L1', '#6de8dc');
-        l1.userData.l1 = true;
-        this.root.add(l1);
+        this.l1Marker = new THREE.Mesh(
+            new THREE.SphereGeometry(0.006, 14, 10),
+            new THREE.MeshBasicMaterial({color: 0x6de8dc}),
+        );
+        this.l1Marker.userData.label = 'Sun–EMB L1';
+        this.l1ExactLabel = makeLabel('L1 · Sun–EMB', '#6de8dc');
+        this.l1ApproximateLabel = makeLabel('≈ L1 · Sun–EMB', '#f0bd73');
+        this.root.add(this.l1Marker, this.l1ExactLabel, this.l1ApproximateLabel);
     }
 
-    private addWindParticles(): THREE.Points {
-        const count = 900;
-        const positions = new Float32Array(count * 3);
-        const seeds = new Float32Array(count);
-        for (let index = 0; index < count; index++) {
-            seeds[index] = Math.random();
-            const radius = Math.random() * 2;
-            const angle = Math.random() * Math.PI * 2;
-            this.windPhysicalRadii[index] = radius;
-            this.windAngles[index] = angle;
-            positions[index * 3] = Math.cos(angle) * this.displayRadius(radius);
-            positions[index * 3 + 1] = (Math.random() - 0.5) * 0.08;
-            positions[index * 3 + 2] = Math.sin(angle) * this.displayRadius(radius);
-        }
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('seed', new THREE.BufferAttribute(seeds, 1));
-        const points = new THREE.Points(
-            geometry,
-            new THREE.PointsMaterial({
+    private addLocalTelemetryIndicators(): [THREE.Sprite, THREE.Sprite] {
+        const plasma = new THREE.Sprite(
+            new THREE.SpriteMaterial({
+                map: radialTexture(),
                 color: 0x51d6c8,
-                size: 0.007,
                 transparent: true,
-                opacity: 0.38,
+                opacity: 0.48,
                 blending: THREE.AdditiveBlending,
                 depthWrite: false,
             }),
         );
-        points.userData.wind = true;
-        this.root.add(points);
-        return points;
+        plasma.scale.setScalar(0.075);
+        plasma.userData.label = 'Local plasma observation';
+        const imf = new THREE.Sprite(
+            new THREE.SpriteMaterial({
+                map: radialTexture(),
+                color: 0x8ddfff,
+                transparent: true,
+                opacity: 0.58,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            }),
+        );
+        imf.scale.setScalar(0.048);
+        imf.userData.label = 'Local IMF observation';
+        this.root.add(plasma, imf);
+        return [plasma, imf];
     }
 
     private rebuildEvents(): void {
@@ -329,30 +329,10 @@ export class HeliosphereScene {
                 flare.scale.setScalar(0.09);
                 flare.userData.eventId = event.id;
                 content.add(flare);
-            } else if (event.kind === 'hss') {
-                const spiral = new THREE.Line(
-                    this.parkerSpiralGeometry(),
-                    new THREE.LineBasicMaterial({
-                        color: 0x81e78c,
-                        transparent: true,
-                        opacity: 0.5,
-                    }),
-                );
-                spiral.userData.eventId = event.id;
-                spiral.userData.hssSpiral = true;
-                content.add(spiral);
             } else {
-                const marker = new THREE.Sprite(new THREE.SpriteMaterial({
-                    map: radialTexture(),
-                    color: event.kind === 'storm' ? 0xe785ff : 0xff8f61,
-                    transparent: true,
-                    opacity: 0.75,
-                }));
-                marker.scale.setScalar(0.06);
-                marker.position.set(this.displayRadius(1), 0, 0);
-                marker.userData.eventId = event.id;
-                marker.userData.physicalRadius = 1;
-                content.add(marker);
+                // Catalog records without a real spatial coordinate remain in
+                // the event list, but are not assigned invented 3D geometry.
+                continue;
             }
             const materials: EventVisual['materials'] = [];
             content.traverse((object) => {
@@ -384,8 +364,6 @@ export class HeliosphereScene {
             } else if (visual.event.kind === 'flare' && visual.event.flare?.locationParsed &&
                 visual.event.flare.latitudeDeg !== undefined && visual.event.flare.longitudeDeg !== undefined) {
                 active = active && this.updateFlare(visual, cursor);
-            } else if (visual.event.kind === 'hss') {
-                visual.root.rotation.y = cursor / 86_400_000 * 0.24;
             }
             return {visual, selected, active};
         });
@@ -421,7 +399,8 @@ export class HeliosphereScene {
         const length = this.displayRadius(displayPhysicalRadius);
         const halfAngle = THREE.MathUtils.degToRad(Math.min(80, cme.halfAngleDeg ?? 24));
         const base = Math.max(0.015, Math.tan(halfAngle) * length);
-        const direction = sphericalDirection(cme.latitudeDeg, cme.longitudeDeg);
+        const direction = this.eventDirection(cme.latitudeDeg, cme.longitudeDeg, analysis);
+        if (!direction) return false;
         const shell = visual.content.children[0];
         shell.scale.set(base, length, base);
         shell.position.copy(direction).multiplyScalar(length / 2);
@@ -442,7 +421,8 @@ export class HeliosphereScene {
         const start = Date.parse(visual.event.startTime);
         const peak = Date.parse(flare.peakTime || visual.event.startTime);
         const end = Date.parse(flare.endTime || visual.event.endTime || flare.peakTime || visual.event.startTime);
-        const direction = sphericalDirection(flare.latitudeDeg, flare.longitudeDeg);
+        const direction = this.eventDirection(flare.latitudeDeg, flare.longitudeDeg, start);
+        if (!direction) return false;
         visual.root.position.copy(direction).multiplyScalar(0.042);
         const attack = Math.max(1, peak - start);
         const release = Math.max(1, end - peak);
@@ -454,51 +434,117 @@ export class HeliosphereScene {
 
     private updatePlanets(cursor: number): void {
         for (const planet of this.planets) {
-            const physicalPosition = orbitalPosition(planet.elements, cursor);
-            planet.mesh.position.copy(this.mapPhysicalVector(physicalPosition));
-            planet.label.position.copy(planet.mesh.position).add(new THREE.Vector3(0, 0.035, 0));
+            const state = bodyPositionAt(this.state?.ephemeris, planet.id, cursor);
+            planet.mesh.visible = Boolean(state);
+            planet.exactLabel.visible = Boolean(state?.exact);
+            planet.approximateLabel.visible = Boolean(state && !state.exact);
+            if (state) {
+                planet.mesh.position.copy(
+                    this.mapPhysicalVector(eclipticToScene(state.position)),
+                );
+                const labelPosition = planet.mesh.position.clone()
+                    .add(new THREE.Vector3(0, 0.035, 0));
+                planet.exactLabel.position.copy(labelPosition);
+                planet.approximateLabel.position.copy(labelPosition);
+            }
+            const orbit = orbitPositionsAt(
+                this.state?.ephemeris,
+                planet.id,
+                cursor,
+                planet.periodDays,
+            );
+            planet.orbit.visible = orbit.positions.length === 256;
+            if (planet.orbit.visible) {
+                const attribute = planet.orbit.geometry
+                    .getAttribute('position') as THREE.BufferAttribute;
+                for (let index = 0; index < orbit.positions.length; index++) {
+                    const position = this.mapPhysicalVector(
+                        eclipticToScene(orbit.positions[index]),
+                    );
+                    attribute.setXYZ(index, position.x, position.y, position.z);
+                }
+                attribute.needsUpdate = true;
+                const material = planet.orbit.material as THREE.LineBasicMaterial;
+                material.color.set(orbit.exact ? 0x35536b : 0x7c6243);
+                material.opacity = orbit.exact ? 0.34 : 0.42;
+            }
         }
-        const earth = this.planets.find((planet) => planet.name === 'Earth');
-        const l1 = this.root.children.find((item) => item.userData.l1);
-        if (earth && l1) {
-            l1.position.copy(earth.mesh.position).multiplyScalar(0.99).add(new THREE.Vector3(0, -0.03, 0));
+        const l1 = bodyPositionAt(this.state?.ephemeris, BODY_IDS.L1, cursor);
+        if (this.l1Marker && this.l1ExactLabel && this.l1ApproximateLabel) {
+            this.l1Marker.visible = Boolean(l1);
+            this.l1ExactLabel.visible = Boolean(l1?.exact);
+            this.l1ApproximateLabel.visible = Boolean(l1 && !l1.exact);
+            if (l1) {
+                const position = this.mapPhysicalVector(eclipticToScene(l1.position));
+                this.l1Marker.position.copy(position);
+                const labelPosition = position.clone().add(new THREE.Vector3(0, -0.03, 0));
+                this.l1ExactLabel.position.copy(labelPosition);
+                this.l1ApproximateLabel.position.copy(labelPosition);
+            }
         }
     }
 
-    private updateWind(time: number): void {
-        const points = telemetryAtCursor(
+    private updateLocalTelemetry(cursor: number): void {
+        const point = telemetryAtCursor(
             this.state?.telemetry?.points ?? this.state?.live?.recent,
-            this.state?.cursor ?? 0,
+            cursor,
             this.state?.telemetry?.gaps,
         );
-        const speed = points?.speedKms ?? this.state?.live?.speedKms ?? 400;
-        const positions = this.windParticles.geometry.getAttribute('position') as THREE.BufferAttribute;
-        const elapsed = Math.min(0.1, Math.max(0, (time - this.lastWindTime) / 1_000));
-        this.lastWindTime = time;
-        // The visual flow is accelerated, but radial motion remains outward and
-        // its relative rate follows the selected measured speed.
-        const velocity = (speed / 400) * 0.025 * elapsed;
-        for (let index = 0; index < positions.count; index++) {
-            const next = (this.windPhysicalRadii[index] + velocity) % 2;
-            this.windPhysicalRadii[index] = next;
-            const angle = this.windAngles[index];
-            positions.setX(index, Math.cos(angle) * this.displayRadius(next));
-            positions.setZ(index, Math.sin(angle) * this.displayRadius(next));
+        const live = this.state?.live;
+        const speed = point?.speedKms ?? live?.speedKms;
+        const bz = point?.bzGsmNt ?? live?.bzGsmNt;
+        const plasmaAnchor = point?.plasmaAnchor ?? live?.plasmaAnchor;
+        const imfAnchor = point?.imfAnchor ?? live?.imfAnchor;
+        this.placeLocalIndicator(this.plasmaIndicator, plasmaAnchor, speed !== undefined);
+        this.placeLocalIndicator(this.imfIndicator, imfAnchor, bz !== undefined);
+        if (speed !== undefined) {
+            this.plasmaIndicator.scale.setScalar(
+                0.06 + Math.min(0.035, Math.max(0, speed - 300) / 20_000),
+            );
         }
-        positions.needsUpdate = true;
-        const material = this.windParticles.material as THREE.PointsMaterial;
-        const bz = points?.bzGsmNt ?? this.state?.live?.bzGsmNt ?? 0;
-        material.color.set(bz < -5 ? 0xff6f76 : 0x51d6c8);
+        if (bz !== undefined) {
+            (this.imfIndicator.material as THREE.SpriteMaterial).color
+                .set(bz < -5 ? 0xff6f76 : 0x8ddfff);
+        }
     }
 
-    private updateOrbitGeometry(): void {
+    private placeLocalIndicator(
+        indicator: THREE.Sprite,
+        anchor: string | undefined,
+        hasValue: boolean,
+    ): void {
+        const bodyID = anchor === 'earth'
+            ? BODY_IDS.Earth
+            : anchor === 'semb-l1' ? BODY_IDS.L1 : undefined;
+        const state = bodyID
+            ? bodyPositionAt(this.state?.ephemeris, bodyID, this.state?.cursor ?? 0)
+            : undefined;
+        indicator.visible = hasValue && Boolean(state);
+        if (state) {
+            indicator.position.copy(
+                this.mapPhysicalVector(eclipticToScene(state.position)),
+            );
+        }
+    }
+
+    private eventDirection(
+        latitudeDeg: number,
+        longitudeDeg: number,
+        eventTime: number,
+    ): THREE.Vector3 | undefined {
+        if (!Number.isFinite(eventTime)) return undefined;
+        const earth = bodyPositionAt(this.state?.ephemeris, BODY_IDS.Earth, eventTime);
+        if (!earth) return undefined;
+        const direction = heeqDirectionToEcliptic(
+            latitudeDeg,
+            longitudeDeg,
+            earth.position,
+        );
+        return direction ? eclipticToScene(direction) : undefined;
+    }
+
+    private updateScaleGeometry(): void {
         for (const object of this.root.children) {
-            const elements = object.userData.planetOrbit as OrbitalElements | undefined;
-            if (elements) {
-                (object as THREE.Line).geometry.dispose();
-                (object as THREE.Line).geometry = this.planetOrbitGeometry(elements);
-                continue;
-            }
             const physical = object.userData.physicalRadius as number | undefined;
             if (physical === undefined) continue;
             if (object.userData.referenceRing) {
@@ -506,27 +552,6 @@ export class HeliosphereScene {
                 object.scale.setScalar(radius / 2);
             }
         }
-        for (const visual of this.eventVisuals) {
-            visual.root.traverse((object) => {
-                if (object.userData.hssSpiral) {
-                    (object as THREE.Line).geometry.dispose();
-                    (object as THREE.Line).geometry = this.parkerSpiralGeometry();
-                }
-                const physical = object.userData.physicalRadius as number | undefined;
-                if (physical !== undefined) object.position.set(this.displayRadius(physical), 0, 0);
-            });
-        }
-    }
-
-    private planetOrbitGeometry(elements: OrbitalElements): THREE.BufferGeometry {
-        const points: THREE.Vector3[] = [];
-        for (let index = 0; index < 180; index++) {
-            points.push(this.mapPhysicalVector(orbitalPositionFromMean(
-                elements,
-                index / 180 * Math.PI * 2,
-            )));
-        }
-        return new THREE.BufferGeometry().setFromPoints(points);
     }
 
     private mapPhysicalVector(vector: THREE.Vector3): THREE.Vector3 {
@@ -534,21 +559,6 @@ export class HeliosphereScene {
         return radius === 0
             ? vector.clone()
             : vector.clone().multiplyScalar(this.displayRadius(radius) / radius);
-    }
-
-    private parkerSpiralGeometry(): THREE.BufferGeometry {
-        const points: THREE.Vector3[] = [];
-        for (let index = 0; index <= 180; index++) {
-            const physicalRadius = 0.07 + index / 180 * 1.65;
-            const radius = this.displayRadius(physicalRadius);
-            const angle = index / 180 * Math.PI * 1.7;
-            points.push(new THREE.Vector3(
-                Math.cos(angle) * radius,
-                0.018 * Math.sin(angle * 3),
-                Math.sin(angle) * radius,
-            ));
-        }
-        return new THREE.BufferGeometry().setFromPoints(points);
     }
 
     private displayRadius(physicalAU: number): number {
@@ -591,51 +601,6 @@ export class HeliosphereScene {
         const id = hits.find((hit) => hit.object.userData.eventId)?.object.userData.eventId as string | undefined;
         if (id) this.onEventSelected?.(id);
     }
-}
-
-function orbitalPosition(elements: OrbitalElements, cursor: number): THREE.Vector3 {
-    const j2000 = Date.UTC(2000, 0, 1, 12);
-    const days = (cursor - j2000) / 86_400_000;
-    const meanLongitude = THREE.MathUtils.degToRad(
-        elements.meanLongitudeDeg + days / elements.periodDays * 360,
-    );
-    const meanAnomaly = meanLongitude - THREE.MathUtils.degToRad(elements.longitudePerihelionDeg);
-    return orbitalPositionFromMean(elements, meanAnomaly);
-}
-
-function orbitalPositionFromMean(elements: OrbitalElements, meanAnomaly: number): THREE.Vector3 {
-    let eccentricAnomaly = meanAnomaly;
-    for (let iteration = 0; iteration < 8; iteration++) {
-        eccentricAnomaly -= (
-            eccentricAnomaly - elements.eccentricity * Math.sin(eccentricAnomaly) - meanAnomaly
-        ) / (1 - elements.eccentricity * Math.cos(eccentricAnomaly));
-    }
-    const xOrbital = elements.semiMajorAU * (Math.cos(eccentricAnomaly) - elements.eccentricity);
-    const yOrbital = elements.semiMajorAU * Math.sqrt(1 - elements.eccentricity ** 2) * Math.sin(eccentricAnomaly);
-    const node = THREE.MathUtils.degToRad(elements.longitudeNodeDeg);
-    const inclination = THREE.MathUtils.degToRad(elements.inclinationDeg);
-    const argumentPerihelion = THREE.MathUtils.degToRad(
-        elements.longitudePerihelionDeg - elements.longitudeNodeDeg,
-    );
-    const cosArgument = Math.cos(argumentPerihelion);
-    const sinArgument = Math.sin(argumentPerihelion);
-    const xPerihelion = xOrbital * cosArgument - yOrbital * sinArgument;
-    const yPerihelion = xOrbital * sinArgument + yOrbital * cosArgument;
-    const xEcliptic = xPerihelion * Math.cos(node) - yPerihelion * Math.cos(inclination) * Math.sin(node);
-    const yEcliptic = xPerihelion * Math.sin(node) + yPerihelion * Math.cos(inclination) * Math.cos(node);
-    const zEcliptic = yPerihelion * Math.sin(inclination);
-    // Three.js uses Y as scene-up; J2000 ecliptic X/Y map to scene X/Z.
-    return new THREE.Vector3(xEcliptic, zEcliptic, yEcliptic);
-}
-
-function sphericalDirection(latitudeDegrees: number, longitudeDegrees: number): THREE.Vector3 {
-    const latitude = THREE.MathUtils.degToRad(latitudeDegrees);
-    const longitude = THREE.MathUtils.degToRad(longitudeDegrees);
-    return new THREE.Vector3(
-        Math.cos(latitude) * Math.cos(longitude),
-        Math.sin(latitude),
-        Math.cos(latitude) * Math.sin(longitude),
-    ).normalize();
 }
 
 function radialTexture(): THREE.CanvasTexture {

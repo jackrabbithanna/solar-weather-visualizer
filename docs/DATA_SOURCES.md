@@ -3,6 +3,25 @@
 External services can change independently of the application. “Verified” dates
 record the last schema inspection, not a service guarantee.
 
+## NASA/JPL Horizons
+
+- Base: `https://ssd.jpl.nasa.gov/api/horizons.api`
+- Purpose: geometric heliocentric state vectors for Mercury, Venus, Earth,
+  Mars, and the Sun–Earth/Moon-barycenter L1 point.
+- Targets: `199`, `299`, `399`, `499`, and `31`; center `500@10`.
+- Output: UTC-tagged J2000 ecliptic position and velocity, AU and AU/day,
+  without light-time or stellar-aberration corrections.
+- Sampling: daily state vectors with orbital-period padding. Long requests are
+  split below 10,000 output rows and responses are cached for 30 days.
+- Wire format: the API JSON envelope contains a CSV vector table between
+  `$$SOE` and `$$EOE`. Both markers, target ID, finite numeric fields, and
+  monotonic timestamps are validated before data reaches the renderer.
+- Failure policy: stale exact cache data is preferred; otherwise the scene uses
+  a clearly marked JPL analytical approximation.
+- Verified: 2026-07-25 against the DE441 Earth and SEMB-L1 vector outputs.
+
+Reference: <https://ssd-api.jpl.nasa.gov/doc/horizons.html>
+
 ## NASA CCMC DONKI
 
 - Purpose: CME, flare, HSS, SEP, interplanetary shock, geomagnetic storm, linked

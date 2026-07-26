@@ -51,16 +51,40 @@ are not invented when absent.
   when the standard latitude/longitude form is present.
 - NOAA and OMNI magnetic vectors remain labeled GSE or GSM. A local L1 or
   bow-shock vector is never projected as a heliosphere-wide magnetic field.
-- Planet positions use JPL’s approximate J2000 Keplerian elements. Mean anomaly
-  advances by the documented sidereal period, Kepler’s equation is solved
-  iteratively, and the orbital-plane result is rotated into the J2000 ecliptic
-  frame. The coordinate module is responsible for explicit conversion before
-  comparisons with HEEQ event directions.
+- Planet and Sun–Earth/Moon-barycenter L1 positions use geometric state vectors
+  from NASA/JPL Horizons, centered on the Sun and expressed in the J2000
+  ecliptic frame. Daily position and velocity samples are interpolated with a
+  cubic Hermite curve; exact samples are never extrapolated across missing
+  coverage.
+- CME HEEQ and flare Stonyhurst directions are transformed at the event epoch,
+  not the current replay cursor. The HEEQ basis uses the solar north pole and
+  the contemporaneous Sun-to-Earth vector. The resulting inertial direction is
+  then mapped into the common J2000 ecliptic scene.
 
-Reference: <https://ssd.jpl.nasa.gov/planets/approx_pos.html>
+References:
+
+- <https://ssd-api.jpl.nasa.gov/doc/horizons.html>
+- <https://stereo-ssc.nascom.nasa.gov/coordinates_explanation.shtml>
 
 Unknown coordinates remain unknown. A CME with no usable longitude is retained
 in the event list but is not assigned a directed 3D cone.
+
+## Planet ephemeris and fallback
+
+Horizons requests use target IDs 199, 299, 399, 499, and 31, coordinate center
+`500@10`, geometric vectors without light-time or aberration corrections, and
+AU/day units. Each planet carries enough samples to draw one actual trajectory
+revolution centered on any replay cursor. L1 is the dynamic Sun–Earth/Moon
+barycenter L1 point, not a fixed fraction of Earth's heliocentric vector.
+
+If exact Horizons data and its cache are unavailable, the renderer uses JPL's
+published element-and-rate approximation. The higher-accuracy 1800–2050 table
+is used inside that interval and the 3000 BC–3000 AD table otherwise. L1 then
+uses a collinear three-body approximation. Every affected label is prefixed
+with `≈`, orbit lines change color, and the scene reports an analytical
+fallback. Outside the formula's documented validity a body is hidden.
+
+Reference: <https://ssd.jpl.nasa.gov/planets/approx_pos.html>
 
 ## Spatial scale
 
@@ -69,12 +93,13 @@ Celestial-body radii are enlarged and labeled as not to scale.
 
 Two radial displays share the same physical state:
 
-- Linear: `r′ = r`.
+- Linear: `r′ = r`; this is the authoritative distance view.
 - Compressed: `r′ = 2 × sqrt(r / 2)`.
 
 The compressed transform maps 0–2 physical AU onto 0–2 display units, expands
-the inner heliosphere, and preserves angular direction. Simulation time and
-travel calculations always use physical distances.
+the inner heliosphere, and preserves angular direction, but it does not preserve
+relative distance. The scene displays a persistent warning in compressed mode.
+Simulation time and travel calculations always use physical distances.
 
 ## Event visuals
 
@@ -99,9 +124,17 @@ times.
 ### High-speed streams
 
 DONKI HSS records do not provide a full coronal-hole geometry. Parker-spiral
-bands are therefore illustrative and driven by measured or forecast wind speed.
-An HSS annotation marks where and when the stream was observed or forecast; it
-does not claim a reconstructed coronal-hole boundary.
+geometry is therefore not assigned to them. HSS, SEP, shock, and storm records
+without real spatial coordinates remain available in the event list and detail
+views but are absent from the 3D scene.
+
+### Local solar-wind observations
+
+OMNI observations are anchored at Earth and NOAA observations at the
+Sun–Earth/Moon L1 point. Plasma and IMF use independent anchors because their
+sources can transition at different timestamps. The marker is hidden when the
+cursor is in a data gap or no location is known. A local measurement is never
+painted as a heliosphere-wide field.
 
 ## Data classification
 
