@@ -9,16 +9,55 @@ import {
     heeqDirectionToEcliptic,
     orbitPositionsAt,
 } from './ephemeris';
+import {
+    CMEStreakSeed,
+    cmeAngularShape,
+    createCMECapGeometry,
+    createCMEContourGeometry,
+    createCMEStreakSeeds,
+} from './eventGeometry';
 
 const AU_KM = 149_597_870.7;
 const SOLAR_RADIUS_AU = 695_700 / AU_KM;
+const CME_START_RADIUS_AU = 21.5 * SOLAR_RADIUS_AU;
 const SELECTED_EVENT_COLOR = new THREE.Color(0xfff1aa);
+const EVENT_AXIS = new THREE.Vector3(0, 1, 0);
+
+interface EventMaterial {
+    material: THREE.Material;
+    opacity: number;
+    color?: THREE.Color;
+    opacityUniform?: {value: number};
+    colorUniform?: {value: THREE.Color};
+}
+
+interface CMEVisualParts {
+    group: THREE.Group;
+    front: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    sheath: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    contours: THREE.LineSegments;
+    streaks: THREE.LineSegments;
+    pickProxy: THREE.Mesh;
+    streakSeeds: CMEStreakSeed[];
+    label: THREE.Sprite;
+    forecastHalo: THREE.Sprite;
+}
+
+interface FlareVisualParts {
+    group: THREE.Group;
+    hotspot: THREE.Mesh;
+    plume: THREE.Mesh;
+    pulseRing: THREE.Mesh;
+    glow: THREE.Sprite;
+}
 
 interface EventVisual {
     root: THREE.Group;
     content: THREE.Group;
-    materials: Array<{material: THREE.Material; opacity: number; color?: THREE.Color}>;
+    materials: EventMaterial[];
     event: domain.EventDTO;
+    cme?: CMEVisualParts;
+    flare?: FlareVisualParts;
 }
 
 interface PlanetVisual {
@@ -283,6 +322,7 @@ export class HeliosphereScene {
     }
 
     private rebuildEvents(): void {
+        for (const visual of this.eventVisuals) disposeObject(visual.root);
         this.eventLayer.clear();
         this.eventVisuals.length = 0;
         const events = this.state?.events?.events ?? [];
@@ -292,64 +332,199 @@ export class HeliosphereScene {
             const content = new THREE.Group();
             root.userData.eventId = event.id;
             root.add(content);
+            let cme: CMEVisualParts | undefined;
+            let flare: FlareVisualParts | undefined;
             if (event.kind === 'cme' && event.cme?.directionKnown &&
                 event.cme.speedKms && event.cme.latitudeDeg !== undefined &&
                 event.cme.longitudeDeg !== undefined) {
-                const shell = new THREE.Mesh(
-                    new THREE.ConeGeometry(1, 1, 48, 1, true),
-                    new THREE.MeshBasicMaterial({
-                        color: 0x4bd9ff,
-                        transparent: true,
-                        opacity: 0.19,
-                        wireframe: true,
-                        side: THREE.DoubleSide,
-                        depthWrite: false,
-                    }),
-                );
-                content.add(shell);
-                const front = new THREE.Sprite(new THREE.SpriteMaterial({
-                    map: radialTexture(),
-                    color: 0x77e6ff,
-                    transparent: true,
-                    opacity: 0.52,
-                    blending: THREE.AdditiveBlending,
-                    depthWrite: false,
-                }));
-                front.userData.eventId = event.id;
-                content.add(front);
+                cme = this.createCMEVisual(event, content);
             } else if (event.kind === 'flare' && event.flare?.locationParsed &&
                 event.flare.latitudeDeg !== undefined && event.flare.longitudeDeg !== undefined) {
-                const flare = new THREE.Sprite(new THREE.SpriteMaterial({
-                    map: radialTexture(),
-                    color: 0xffd37a,
-                    transparent: true,
-                    blending: THREE.AdditiveBlending,
-                    depthWrite: false,
-                }));
-                flare.scale.setScalar(0.09);
-                flare.userData.eventId = event.id;
-                content.add(flare);
+                flare = this.createFlareVisual(event, content);
             } else {
                 // Catalog records without a real spatial coordinate remain in
                 // the event list, but are not assigned invented 3D geometry.
                 continue;
             }
-            const materials: EventVisual['materials'] = [];
-            content.traverse((object) => {
-                const material = (object as THREE.Mesh).material;
-                const items = Array.isArray(material) ? material : material ? [material] : [];
-                for (const item of items) {
-                    const colored = item as THREE.Material & {color?: THREE.Color};
-                    materials.push({
-                        material: item,
-                        opacity: item.opacity,
-                        color: colored.color?.clone(),
-                    });
-                }
-            });
             this.eventLayer.add(root);
-            this.eventVisuals.push({root, content, materials, event});
+            this.eventVisuals.push({
+                root,
+                content,
+                materials: collectEventMaterials(content),
+                event,
+                cme,
+                flare,
+            });
         }
+    }
+
+    private createCMEVisual(event: domain.EventDTO, content: THREE.Group): CMEVisualParts {
+        const cme = event.cme;
+        const shape = cmeAngularShape(
+            cme?.halfAngleDeg,
+            cme?.minorHalfWidthDeg,
+            cme?.tiltDeg,
+        );
+        const capGeometry = createCMECapGeometry(shape);
+        const group = new THREE.Group();
+        group.userData.eventId = event.id;
+        content.add(group);
+
+        const sheathMaterial = makeCMESurfaceMaterial(0x1b566f, 0.012, 0.35);
+        const sheath = new THREE.Mesh(capGeometry, sheathMaterial);
+        sheath.renderOrder = 3;
+        sheath.userData.eventId = event.id;
+        group.add(sheath);
+
+        const frontMaterial = makeCMESurfaceMaterial(0x3aa8c5, 0.035, 1);
+        const front = new THREE.Mesh(capGeometry, frontMaterial);
+        front.renderOrder = 5;
+        front.userData.eventId = event.id;
+        group.add(front);
+
+        const contours = new THREE.LineSegments(
+            createCMEContourGeometry(shape),
+            new THREE.LineBasicMaterial({
+                color: 0x8ceaff,
+                transparent: true,
+                opacity: 0.32,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            }),
+        );
+        contours.renderOrder = 6;
+        contours.userData.eventId = event.id;
+        group.add(contours);
+
+        const streakSeeds = createCMEStreakSeeds(event.id, shape, 24);
+        const streakGeometry = new THREE.BufferGeometry();
+        streakGeometry.setAttribute(
+            'position',
+            new THREE.BufferAttribute(
+                new Float32Array(streakSeeds.length * 2 * 3),
+                3,
+            ).setUsage(THREE.DynamicDrawUsage),
+        );
+        const streaks = new THREE.LineSegments(
+            streakGeometry,
+            new THREE.LineBasicMaterial({
+                color: 0x4dc8f2,
+                transparent: true,
+                opacity: 0.16,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            }),
+        );
+        streaks.renderOrder = 2;
+        group.add(streaks);
+
+        const pickProxy = new THREE.Mesh(
+            capGeometry,
+            new THREE.MeshBasicMaterial({
+                transparent: true,
+                opacity: 0,
+                depthWrite: false,
+                colorWrite: false,
+                side: THREE.DoubleSide,
+            }),
+        );
+        pickProxy.userData.eventId = event.id;
+        group.add(pickProxy);
+
+        const label = makeCMELabel(event);
+        label.visible = false;
+        label.renderOrder = 25;
+        label.userData.eventId = event.id;
+        group.add(label);
+
+        const forecastHalo = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: ringTexture(),
+            color: 0xc896ff,
+            transparent: true,
+            opacity: 0.56,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        }));
+        forecastHalo.visible = false;
+        forecastHalo.scale.setScalar(0.095);
+        forecastHalo.renderOrder = 7;
+        forecastHalo.userData.eventId = event.id;
+        content.add(forecastHalo);
+
+        return {
+            group,
+            front,
+            sheath,
+            contours,
+            streaks,
+            pickProxy,
+            streakSeeds,
+            label,
+            forecastHalo,
+        };
+    }
+
+    private createFlareVisual(event: domain.EventDTO, content: THREE.Group): FlareVisualParts {
+        const group = new THREE.Group();
+        group.userData.eventId = event.id;
+        content.add(group);
+
+        const hotspot = new THREE.Mesh(
+            new THREE.SphereGeometry(0.008, 20, 12),
+            new THREE.MeshBasicMaterial({color: 0xffd37a}),
+        );
+        hotspot.userData.eventId = event.id;
+        hotspot.renderOrder = 8;
+        group.add(hotspot);
+
+        const plume = new THREE.Mesh(
+            new THREE.ConeGeometry(0.012, 0.065, 24, 1, true),
+            new THREE.MeshBasicMaterial({
+                color: 0xffad4d,
+                transparent: true,
+                opacity: 0.2,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            }),
+        );
+        plume.position.y = 0.032;
+        plume.rotation.x = Math.PI;
+        plume.userData.eventId = event.id;
+        plume.renderOrder = 6;
+        group.add(plume);
+
+        const pulseRing = new THREE.Mesh(
+            new THREE.RingGeometry(0.012, 0.016, 40),
+            new THREE.MeshBasicMaterial({
+                color: 0xffd98b,
+                transparent: true,
+                opacity: 0.48,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            }),
+        );
+        pulseRing.rotation.x = -Math.PI / 2;
+        pulseRing.position.y = 0.002;
+        pulseRing.userData.eventId = event.id;
+        pulseRing.renderOrder = 7;
+        group.add(pulseRing);
+
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: radialTexture(),
+            color: 0xffcc70,
+            transparent: true,
+            opacity: 0.65,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        }));
+        glow.scale.setScalar(0.055);
+        glow.userData.eventId = event.id;
+        glow.renderOrder = 9;
+        group.add(glow);
+
+        return {group, hotspot, plume, pulseRing, glow};
     }
 
     private updateEventVisuals(cursor: number): void {
@@ -371,64 +546,151 @@ export class HeliosphereScene {
         for (const {visual, selected, active} of statuses) {
             visual.content.visible = active;
             visual.root.visible = active;
+            if (visual.cme) visual.cme.label.visible = active && selected;
             const dimmed = hasVisibleSelection && !selected;
             const opacityFactor = dimmed ? 0.24 : hasVisibleSelection && selected ? 1.35 : 1;
             visual.content.traverse((object) => {
-                object.renderOrder = hasVisibleSelection && selected ? 20 : 0;
+                const baseRenderOrder = object.userData.baseRenderOrder as number | undefined;
+                if (baseRenderOrder === undefined) {
+                    object.userData.baseRenderOrder = object.renderOrder;
+                }
+                object.renderOrder = (baseRenderOrder ?? object.renderOrder) +
+                    (hasVisibleSelection && selected ? 20 : 0);
             });
             for (const item of visual.materials) {
-                item.material.opacity = Math.min(1, item.opacity * opacityFactor);
+                const opacity = Math.min(1, item.opacity * opacityFactor);
+                item.material.opacity = opacity;
+                if (item.opacityUniform) item.opacityUniform.value = opacity;
                 const colored = item.material as THREE.Material & {color?: THREE.Color};
-                if (item.color && colored.color) {
-                    colored.color.copy(item.color);
-                    if (hasVisibleSelection && selected) {
-                        colored.color.lerp(SELECTED_EVENT_COLOR, 0.38);
-                    }
+                const color = item.color?.clone();
+                if (color && hasVisibleSelection && selected) {
+                    color.lerp(SELECTED_EVENT_COLOR, visual.cme ? 0.22 : 0.38);
                 }
+                if (color && colored.color) colored.color.copy(color);
+                if (color && item.colorUniform) item.colorUniform.value.copy(color);
             }
         }
     }
 
     private updateCME(visual: EventVisual, cursor: number): boolean {
         const cme = visual.event.cme;
-        if (!cme?.speedKms || cme.latitudeDeg === undefined || cme.longitudeDeg === undefined) return false;
+        const parts = visual.cme;
+        if (!parts || !cme?.speedKms ||
+            cme.latitudeDeg === undefined || cme.longitudeDeg === undefined) {
+            return false;
+        }
         const analysis = Date.parse(cme.analysisTime || visual.event.startTime);
         const elapsedSeconds = Math.max(0, (cursor - analysis) / 1_000);
-        const physicalRadius = 21.5 * SOLAR_RADIUS_AU + cme.speedKms * elapsedSeconds / AU_KM;
+        const physicalRadius = CME_START_RADIUS_AU + cme.speedKms * elapsedSeconds / AU_KM;
         const displayPhysicalRadius = Math.min(2, physicalRadius);
         const length = this.displayRadius(displayPhysicalRadius);
-        const halfAngle = THREE.MathUtils.degToRad(Math.min(80, cme.halfAngleDeg ?? 24));
-        const base = Math.max(0.015, Math.tan(halfAngle) * length);
         const direction = this.eventDirection(cme.latitudeDeg, cme.longitudeDeg, analysis);
         if (!direction) return false;
-        const shell = visual.content.children[0];
-        shell.scale.set(base, length, base);
-        shell.position.copy(direction).multiplyScalar(length / 2);
-        // ConeGeometry's tip is +Y. Aim that tip back at the Sun so the broad
-        // edge is the outward-moving front.
-        shell.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().negate());
-        const front = visual.content.children[1] as THREE.Sprite | undefined;
-        if (front) {
-            front.position.copy(direction).multiplyScalar(length);
-            front.scale.setScalar(Math.max(0.035, base * 1.7));
-        }
+        parts.group.quaternion.setFromUnitVectors(EVENT_AXIS, direction);
+        parts.front.scale.setScalar(length);
+        parts.contours.scale.setScalar(length * 1.002);
+        parts.pickProxy.scale.setScalar(length);
+
+        const travelAU = Math.max(0, displayPhysicalRadius - CME_START_RADIUS_AU);
+        const sheathRadiusAU = Math.max(
+            CME_START_RADIUS_AU,
+            displayPhysicalRadius - Math.max(0.005, travelAU * 0.045),
+        );
+        parts.sheath.scale.setScalar(this.displayRadius(sheathRadiusAU));
+        const phase = this.reducedMotion() ? 0 : physicalRadius * 3.6;
+        parts.front.material.uniforms.uPhase.value = phase;
+        parts.sheath.material.uniforms.uPhase.value = phase * 0.82;
+
+        this.updateCMEStreaks(parts, travelAU);
+        parts.label.position.set(0, length + 0.065, 0);
+        this.updateForecastHalo(visual, cursor);
         return physicalRadius <= 2.05;
+    }
+
+    private updateCMEStreaks(parts: CMEVisualParts, travelAU: number): void {
+        const positions = parts.streaks.geometry.getAttribute('position') as THREE.BufferAttribute;
+        const reducedMotion = this.reducedMotion();
+        parts.streaks.visible = travelAU > 0.008;
+        for (let index = 0; index < parts.streakSeeds.length; index++) {
+            const seed = parts.streakSeeds[index];
+            const motion = reducedMotion ? 0 : travelAU * 2.8 * seed.speed;
+            const cycle = fract(seed.phase + motion);
+            const fraction = 0.16 + 0.76 * cycle;
+            const headRadiusAU = CME_START_RADIUS_AU + travelAU * fraction;
+            const tailRadiusAU = Math.max(
+                CME_START_RADIUS_AU,
+                headRadiusAU - Math.max(0.003, travelAU * 0.04),
+            );
+            const tailRadius = this.displayRadius(tailRadiusAU);
+            const headRadius = this.displayRadius(headRadiusAU);
+            positions.setXYZ(
+                index * 2,
+                seed.direction.x * tailRadius,
+                seed.direction.y * tailRadius,
+                seed.direction.z * tailRadius,
+            );
+            positions.setXYZ(
+                index * 2 + 1,
+                seed.direction.x * headRadius,
+                seed.direction.y * headRadius,
+                seed.direction.z * headRadius,
+            );
+        }
+        positions.needsUpdate = true;
+        parts.streaks.geometry.computeBoundingSphere();
+    }
+
+    private updateForecastHalo(visual: EventVisual, cursor: number): void {
+        const halo = visual.cme?.forecastHalo;
+        if (!halo) return;
+        const forecast = this.state?.forecasts?.forecasts?.find((candidate) =>
+            candidate.linkedCmeIds?.includes(visual.event.id) &&
+            Boolean(candidate.earthArrivalTime),
+        );
+        const arrival = Date.parse(forecast?.earthArrivalTime ?? '');
+        const durationMS = (forecast?.estimatedDurationHours ?? 8) * 3_600_000;
+        const windowStart = arrival - 3 * 3_600_000;
+        const windowEnd = arrival + durationMS;
+        const earth = bodyPositionAt(this.state?.ephemeris, BODY_IDS.Earth, cursor);
+        halo.visible = Number.isFinite(arrival) && cursor >= windowStart &&
+            cursor <= windowEnd && Boolean(earth);
+        if (!halo.visible || !earth) return;
+        halo.position.copy(this.mapPhysicalVector(eclipticToScene(earth.position)));
+        const distanceFromArrival = Math.abs(cursor - arrival);
+        const pulse = 1 - Math.min(1, distanceFromArrival / Math.max(1, durationMS));
+        halo.scale.setScalar(0.08 + pulse * 0.055);
     }
 
     private updateFlare(visual: EventVisual, cursor: number): boolean {
         const flare = visual.event.flare;
-        if (!flare || flare.latitudeDeg === undefined || flare.longitudeDeg === undefined) return false;
+        const parts = visual.flare;
+        if (!parts || !flare ||
+            flare.latitudeDeg === undefined || flare.longitudeDeg === undefined) {
+            return false;
+        }
         const start = Date.parse(visual.event.startTime);
         const peak = Date.parse(flare.peakTime || visual.event.startTime);
         const end = Date.parse(flare.endTime || visual.event.endTime || flare.peakTime || visual.event.startTime);
         const direction = this.eventDirection(flare.latitudeDeg, flare.longitudeDeg, start);
         if (!direction) return false;
-        visual.root.position.copy(direction).multiplyScalar(0.042);
+        parts.group.position.copy(direction).multiplyScalar(0.037);
+        parts.group.quaternion.setFromUnitVectors(EVENT_AXIS, direction);
         const attack = Math.max(1, peak - start);
         const release = Math.max(1, end - peak);
         const strength = cursor <= peak ? (cursor - start) / attack : 1 - (cursor - peak) / release;
         const pulse = Math.max(0.15, Math.min(1, strength));
-        visual.content.scale.setScalar(0.6 + pulse * 0.7);
+        const fluxStrength = flare.peakFluxWattsM2 && flare.peakFluxWattsM2 > 0
+            ? THREE.MathUtils.clamp((Math.log10(flare.peakFluxWattsM2) + 8) / 5, 0, 1)
+            : flareClassStrength(flare.classType);
+        const baseScale = 0.72 + fluxStrength * 0.48;
+        parts.hotspot.scale.setScalar(baseScale * (0.85 + pulse * 0.24));
+        parts.plume.scale.set(
+            baseScale * (0.78 + pulse * 0.32),
+            baseScale * (0.72 + pulse * 0.72),
+            baseScale * (0.78 + pulse * 0.32),
+        );
+        parts.pulseRing.scale.setScalar(baseScale * (0.8 + pulse * 1.7));
+        parts.glow.scale.setScalar(0.038 + baseScale * pulse * 0.035);
         return cursor <= end + 90 * 60_000;
     }
 
@@ -567,6 +829,11 @@ export class HeliosphereScene {
             : physicalAU;
     }
 
+    private reducedMotion(): boolean {
+        return this.state?.bootstrap?.settings?.reducedMotion === true ||
+            document.documentElement.classList.contains('reduced-motion');
+    }
+
     private beginPick(event: PointerEvent): void {
         if (!event.isPrimary || event.button !== 0) return;
         this.pickOrigin = {
@@ -598,12 +865,19 @@ export class HeliosphereScene {
             .filter((visual) => visual.root.visible && visual.content.visible)
             .map((visual) => visual.content);
         const hits = this.raycaster.intersectObjects(targets, true);
-        const id = hits.find((hit) => hit.object.userData.eventId)?.object.userData.eventId as string | undefined;
+        const id = hits
+            .map((hit) => eventIDForObject(hit.object))
+            .find((candidate) => candidate !== undefined);
         if (id) this.onEventSelected?.(id);
     }
 }
 
+let sharedRadialTexture: THREE.CanvasTexture | undefined;
+let sharedRingTexture: THREE.CanvasTexture | undefined;
+const sharedEventTextures = new Set<THREE.Texture>();
+
 function radialTexture(): THREE.CanvasTexture {
+    if (sharedRadialTexture) return sharedRadialTexture;
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 128;
     const context = canvas.getContext('2d');
@@ -616,7 +890,211 @@ function radialTexture(): THREE.CanvasTexture {
         context.fillStyle = gradient;
         context.fillRect(0, 0, 128, 128);
     }
-    return new THREE.CanvasTexture(canvas);
+    sharedRadialTexture = new THREE.CanvasTexture(canvas);
+    sharedRadialTexture.colorSpace = THREE.SRGBColorSpace;
+    sharedEventTextures.add(sharedRadialTexture);
+    return sharedRadialTexture;
+}
+
+function ringTexture(): THREE.CanvasTexture {
+    if (sharedRingTexture) return sharedRingTexture;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 128;
+    const context = canvas.getContext('2d');
+    if (context) {
+        const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
+        gradient.addColorStop(0, 'rgba(255,255,255,0)');
+        gradient.addColorStop(0.48, 'rgba(255,255,255,0)');
+        gradient.addColorStop(0.65, 'rgba(255,255,255,.24)');
+        gradient.addColorStop(0.73, 'rgba(255,255,255,.95)');
+        gradient.addColorStop(0.82, 'rgba(255,255,255,.18)');
+        gradient.addColorStop(1, 'rgba(255,255,255,0)');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 128, 128);
+    }
+    sharedRingTexture = new THREE.CanvasTexture(canvas);
+    sharedRingTexture.colorSpace = THREE.SRGBColorSpace;
+    sharedEventTextures.add(sharedRingTexture);
+    return sharedRingTexture;
+}
+
+function makeCMESurfaceMaterial(
+    color: number,
+    opacity: number,
+    structure: number,
+): THREE.ShaderMaterial {
+    const uniforms = {
+        uColor: {value: new THREE.Color(color)},
+        uOpacity: {value: opacity},
+        uPhase: {value: 0},
+        uStructure: {value: structure},
+    };
+    const material = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: `
+            varying vec2 vUv;
+            varying vec3 vWorldNormal;
+            varying vec3 vWorldPosition;
+
+            void main() {
+                vUv = uv;
+                vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+                vWorldPosition = worldPosition.xyz;
+                vWorldNormal = normalize(mat3(modelMatrix) * normal);
+                gl_Position = projectionMatrix * viewMatrix * worldPosition;
+            }
+        `,
+        fragmentShader: `
+            uniform vec3 uColor;
+            uniform float uOpacity;
+            uniform float uPhase;
+            uniform float uStructure;
+            varying vec2 vUv;
+            varying vec3 vWorldNormal;
+            varying vec3 vWorldPosition;
+
+            void main() {
+                vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+                float fresnel = pow(1.0 - abs(dot(normalize(vWorldNormal), viewDirection)), 2.15);
+                float boundary = smoothstep(0.82, 1.0, vUv.y);
+                float filament = 0.5 + 0.5 * sin(
+                    (vWorldNormal.x * 2.1 + vWorldNormal.y * 3.7 +
+                    vWorldNormal.z * 1.3) * 18.0 - uPhase * 6.28318
+                );
+                float structure = 0.96 + (filament - 0.5) * 0.02 * uStructure;
+                float alpha = uOpacity *
+                    (0.025 + fresnel * 0.96 + boundary * 0.04) * structure;
+                vec3 litColor = uColor * (0.84 + fresnel * 0.28);
+                gl_FragColor = vec4(litColor, clamp(alpha, 0.0, 1.0));
+            }
+        `,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.FrontSide,
+        blending: THREE.NormalBlending,
+    });
+    material.opacity = opacity;
+    material.userData.eventUniforms = {
+        opacity: uniforms.uOpacity,
+        color: uniforms.uColor,
+    };
+    return material;
+}
+
+function collectEventMaterials(root: THREE.Object3D): EventMaterial[] {
+    const materials: EventMaterial[] = [];
+    const seen = new Set<THREE.Material>();
+    root.traverse((object) => {
+        const material = (object as THREE.Mesh).material;
+        const items = Array.isArray(material) ? material : material ? [material] : [];
+        for (const item of items) {
+            if (seen.has(item)) continue;
+            seen.add(item);
+            const colored = item as THREE.Material & {color?: THREE.Color};
+            const eventUniforms = item.userData.eventUniforms as {
+                opacity?: {value: number};
+                color?: {value: THREE.Color};
+            } | undefined;
+            materials.push({
+                material: item,
+                opacity: eventUniforms?.opacity?.value ?? item.opacity,
+                color: eventUniforms?.color?.value.clone() ?? colored.color?.clone(),
+                opacityUniform: eventUniforms?.opacity,
+                colorUniform: eventUniforms?.color,
+            });
+        }
+    });
+    return materials;
+}
+
+function makeCMELabel(event: domain.EventDTO): THREE.Sprite {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const context = canvas.getContext('2d');
+    if (context) {
+        context.fillStyle = 'rgba(3, 12, 22, .88)';
+        context.strokeStyle = 'rgba(123, 225, 244, .72)';
+        context.lineWidth = 2;
+        context.beginPath();
+        context.roundRect(6, 6, 500, 116, 14);
+        context.fill();
+        context.stroke();
+        const speed = Math.round(event.cme?.speedKms ?? 0).toLocaleString('en-US');
+        context.font = '600 25px Nunito, sans-serif';
+        context.textAlign = 'center';
+        context.fillStyle = '#dffaff';
+        context.fillText(`BALLISTIC · ${speed} km/s`, 256, 49);
+        const shape = cmeAngularShape(
+            event.cme?.halfAngleDeg,
+            event.cme?.minorHalfWidthDeg,
+            event.cme?.tiltDeg,
+        );
+        const major = Math.round(THREE.MathUtils.radToDeg(shape.majorHalfAngle));
+        const minor = Math.round(THREE.MathUtils.radToDeg(shape.minorHalfAngle));
+        const tilt = Math.round(THREE.MathUtils.radToDeg(shape.tilt));
+        const angularShape = Math.abs(minor - major) >= 1
+            ? `±${major}° × ±${minor}° · tilt ${tilt}°`
+            : `±${major}° half-angle`;
+        context.font = '500 20px Nunito, sans-serif';
+        context.fillStyle = '#82bed0';
+        context.fillText(angularShape, 256, 88);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.94,
+        depthWrite: false,
+    }));
+    sprite.scale.set(0.44, 0.11, 1);
+    return sprite;
+}
+
+function disposeObject(root: THREE.Object3D): void {
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    const textures = new Set<THREE.Texture>();
+    root.traverse((object) => {
+        const mesh = object as THREE.Mesh;
+        if (mesh.geometry) geometries.add(mesh.geometry);
+        const material = mesh.material;
+        const items = Array.isArray(material) ? material : material ? [material] : [];
+        for (const item of items) {
+            materials.add(item);
+            const map = (item as THREE.Material & {map?: THREE.Texture}).map;
+            if (map && !sharedEventTextures.has(map)) textures.add(map);
+        }
+    });
+    for (const texture of textures) texture.dispose();
+    for (const material of materials) material.dispose();
+    for (const geometry of geometries) geometry.dispose();
+}
+
+function eventIDForObject(object: THREE.Object3D): string | undefined {
+    let candidate: THREE.Object3D | null = object;
+    while (candidate) {
+        const id = candidate.userData.eventId as string | undefined;
+        if (id) return id;
+        candidate = candidate.parent;
+    }
+    return undefined;
+}
+
+function flareClassStrength(classType: string | undefined): number {
+    switch (classType?.trim().charAt(0).toUpperCase()) {
+        case 'X': return 1;
+        case 'M': return 0.76;
+        case 'C': return 0.52;
+        case 'B': return 0.3;
+        case 'A': return 0.14;
+        default: return 0.4;
+    }
+}
+
+function fract(value: number): number {
+    return value - Math.floor(value);
 }
 
 function makeLabel(text: string, color: string): THREE.Sprite {
@@ -625,7 +1103,7 @@ function makeLabel(text: string, color: string): THREE.Sprite {
     canvas.height = 64;
     const context = canvas.getContext('2d');
     if (context) {
-        context.font = '500 28px Inter, sans-serif';
+        context.font = '500 28px Nunito, sans-serif';
         context.textAlign = 'center';
         context.fillStyle = color;
         context.fillText(text, 128, 38);

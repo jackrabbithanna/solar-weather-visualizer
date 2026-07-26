@@ -128,11 +128,17 @@ exact, or using the analytical fallback. Approximate labels begin with `≈` and
 their orbit lines use an amber tint. A body is hidden if neither exact data nor
 the documented JPL fallback covers the selected date.
 
-An expanding CME cone appears only when DONKI supplies a usable analysis time,
-speed, latitude, longitude, and width. Its front is a constant-speed
-illustration. Unknown coordinates remain unknown.
+An expanding, curved CME front appears only when DONKI supplies a usable
+analysis time, speed, latitude, longitude, and width. Available minor-width and
+tilt measurements shape its elliptical cap. Contour arcs and sparse radial
+tracers make the front easier to read in depth; select it to show its speed and
+angular shape beside the front. Linked model arrivals receive a violet halo at
+Earth during the predicted impact window. Propagation remains a constant-speed
+illustration, and unknown coordinates remain unknown.
 
-Flare markers appear only for parseable Stonyhurst source locations.
+Flare hotspots, pulse rings, and outward plumes appear only for parseable
+Stonyhurst source locations. Their size follows reported peak flux or flare
+class on a logarithmic scale.
 HSS, SEP, shock, and storm records remain in the catalog but do not receive
 invented 3D positions when their feeds omit spatial coordinates.
 

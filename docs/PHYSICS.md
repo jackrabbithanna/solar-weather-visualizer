@@ -111,6 +111,12 @@ width, latitude, and longitude. Its front begins at the reported `time21_5` and
 
 `r(t) = 21.5 R☉ + v × (t - time21_5)`
 
+The leading surface is rendered as a curved angular cap at `r(t)`. The reported
+half-angle sets its major extent; `minorHalfWidth` and `tilt`, when supplied,
+make and orient an elliptical cap. A faint inner cap, contour arcs, and sparse
+replay-driven tracers provide depth and motion cues. These layers do not add
+mass, magnetic structure, acceleration, or an inferred uncertainty.
+
 This is a ballistic illustration, not ENLIL output. It is not modified to make a
 forecast arrival appear accurate.
 
@@ -119,7 +125,9 @@ forecast arrival appear accurate.
 A flare is placed on the solar surface only when its Stonyhurst source location
 can be parsed. Its class maps to the conventional GOES peak-flux decade (A
 through X), and the temporal pulse follows the reported begin, peak, and end
-times.
+times. The surface hotspot, tangent pulse ring, and outward plume are display
+layers at that one reported location, not a reconstruction of the coronal
+magnetic field.
 
 ### High-speed streams
 

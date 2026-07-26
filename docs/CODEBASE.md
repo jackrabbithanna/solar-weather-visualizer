@@ -108,13 +108,16 @@ cross-build validation.
   typed telemetry/ephemeris request state.
 - `src/scene/ephemeris.ts` owns exact state-vector interpolation, the bounded
   JPL analytical fallback, HEEQ basis construction, and scene-axis mapping.
+- `src/scene/eventGeometry.ts` builds data-shaped CME caps, sparse contour
+  overlays, and deterministic tracer layouts without backend or native
+  dependencies.
 - `src/layout.ts` owns pane resizing, collapse behavior, accessibility, bounds,
   and versioned local layout persistence.
 - `src/activity.ts` owns the bounded session activity stream and its DOM view;
   messages are stored as text rather than injected markup.
 - `src/scene/HeliosphereScene.ts` owns Three.js resources, picking, accurate
-  planet/L1 trajectories, frame-correct CME/flare geometry, and local
-  Earth/L1 condition indicators.
+  planet/L1 trajectories, event material lifecycles, frame-correct CME/flare
+  placement and animation, and local Earth/L1 condition indicators.
 - `src/charts.ts` renders dependency-free telemetry SVGs, including independent
   empty metric frames that preserve the requested time domain.
 - `src/main.ts` composes the controllers, panels, dialogs, provider workflows,
