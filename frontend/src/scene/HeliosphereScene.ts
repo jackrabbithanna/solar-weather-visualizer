@@ -9,7 +9,6 @@ const SOLAR_RADIUS_AU = 695_700 / AU_KM;
 interface EventVisual {
     root: THREE.Group;
     content: THREE.Group;
-    selection: THREE.Sprite;
     materials: Array<{material: THREE.Material; opacity: number}>;
     event: domain.EventDTO;
 }
@@ -51,7 +50,7 @@ export class HeliosphereScene {
     private scaleValue?: string;
     private lastWindTime = performance.now();
     private selectedEventID?: string;
-    private pendingFocusEventID?: string;
+    private pickOrigin?: {pointerId: number; x: number; y: number};
     onEventSelected?: (id: string) => void;
 
     constructor(private readonly host: HTMLElement) {
@@ -74,6 +73,7 @@ export class HeliosphereScene {
         this.controls.minDistance = 0.35;
         this.controls.maxDistance = 8;
         this.controls.target.set(0, 0, 0);
+        this.raycaster.params.Line.threshold = 0.02;
 
         this.scene.fog = new THREE.FogExp2(0x020711, 0.055);
         this.scene.add(this.root);
@@ -84,7 +84,9 @@ export class HeliosphereScene {
         this.addPlanets();
         this.windParticles = this.addWindParticles();
 
-        this.renderer.domElement.addEventListener('pointerdown', (event) => this.pick(event));
+        this.renderer.domElement.addEventListener('pointerdown', (event) => this.beginPick(event));
+        this.renderer.domElement.addEventListener('pointerup', (event) => this.completePick(event));
+        this.renderer.domElement.addEventListener('pointercancel', (event) => this.cancelPick(event));
         new ResizeObserver(() => this.resize()).observe(host);
         this.resize();
     }
@@ -106,12 +108,8 @@ export class HeliosphereScene {
     render(time: number): void {
         if (!this.state) return;
         this.updatePlanets(this.state.cursor);
-        this.updateEventVisuals(this.state.cursor, time);
+        this.updateEventVisuals(this.state.cursor);
         this.updateWind(time);
-        if (this.pendingFocusEventID && this.pendingFocusEventID === this.selectedEventID) {
-            this.applyEventFocus(this.pendingFocusEventID);
-            this.pendingFocusEventID = undefined;
-        }
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
     }
@@ -119,25 +117,6 @@ export class HeliosphereScene {
     screenshot(): string {
         this.renderer.render(this.scene, this.camera);
         return this.renderer.domElement.toDataURL('image/png');
-    }
-
-    focusEvent(id: string): void {
-        this.pendingFocusEventID = id;
-    }
-
-    private applyEventFocus(id: string): void {
-        const visual = this.eventVisuals.find((item) => item.event.id === id);
-        if (!visual) return;
-        this.root.updateMatrixWorld(true);
-        const target = new THREE.Vector3();
-        visual.selection.getWorldPosition(target);
-        if (target.length() < 0.08) {
-            if (target.lengthSq() > 0) target.normalize().multiplyScalar(0.1);
-            else target.set(0.1, 0, 0);
-        }
-        this.controls.target.copy(target);
-        const direction = this.camera.position.clone().sub(target).normalize();
-        this.camera.position.copy(target).add(direction.multiplyScalar(0.65));
     }
 
     resetCamera(): void {
@@ -326,7 +305,6 @@ export class HeliosphereScene {
                         depthWrite: false,
                     }),
                 );
-                shell.userData.eventId = event.id;
                 content.add(shell);
                 const front = new THREE.Sprite(new THREE.SpriteMaterial({
                     map: radialTexture(),
@@ -375,26 +353,6 @@ export class HeliosphereScene {
                 marker.userData.physicalRadius = 1;
                 content.add(marker);
             }
-            const selection = new THREE.Sprite(new THREE.SpriteMaterial({
-                map: selectionTexture(),
-                color: 0xf2fbff,
-                transparent: true,
-                opacity: 0.95,
-                blending: THREE.AdditiveBlending,
-                depthTest: false,
-                depthWrite: false,
-            }));
-            selection.visible = false;
-            selection.renderOrder = 20;
-            selection.userData.eventId = event.id;
-            if (event.kind === 'hss') {
-                selection.userData.hssSelection = true;
-                selection.position.copy(this.hssSelectionPosition());
-            } else if (content.children[0]?.userData.physicalRadius !== undefined) {
-                selection.userData.physicalRadius = content.children[0].userData.physicalRadius;
-                selection.position.copy(content.children[0].position);
-            }
-            root.add(selection);
             const materials: EventVisual['materials'] = [];
             content.traverse((object) => {
                 const material = (object as THREE.Mesh).material;
@@ -402,12 +360,11 @@ export class HeliosphereScene {
                 for (const item of items) materials.push({material: item, opacity: item.opacity});
             });
             this.eventLayer.add(root);
-            this.eventVisuals.push({root, content, selection, materials, event});
+            this.eventVisuals.push({root, content, materials, event});
         }
     }
 
-    private updateEventVisuals(cursor: number, renderTime: number): void {
-        const reducedMotion = this.state?.bootstrap?.settings.reducedMotion ?? false;
+    private updateEventVisuals(cursor: number): void {
         const statuses = this.eventVisuals.map((visual) => {
             const eventTime = Date.parse(visual.event.startTime);
             const selected = visual.event.id === this.selectedEventID;
@@ -424,24 +381,13 @@ export class HeliosphereScene {
             }
             return {visual, selected, active};
         });
-        const hasEmphasizedSelection = statuses.some(({selected, active}) =>
-            selected && (this.state?.mode === 'live' || active));
+        const hasVisibleSelection = statuses.some(({selected, active}) => selected && active);
         for (const {visual, selected, active} of statuses) {
-            const showSelection = selected && (this.state?.mode === 'live' || active);
             visual.content.visible = active;
-            visual.selection.visible = showSelection;
-            visual.root.visible = active || showSelection;
-            const opacityFactor = selected && hasEmphasizedSelection
-                ? 1.5
-                : hasEmphasizedSelection ? 0.25 : 1;
+            visual.root.visible = active;
+            const opacityFactor = hasVisibleSelection && !selected ? 0.6 : 1;
             for (const item of visual.materials) {
-                item.material.opacity = Math.min(1, item.opacity * opacityFactor);
-            }
-            if (showSelection) {
-                const pulse = reducedMotion ? 1 : 1 + 0.09 * Math.sin(renderTime / 180);
-                visual.selection.scale.setScalar(0.13 * pulse);
-                (visual.selection.material as THREE.SpriteMaterial).opacity =
-                    reducedMotion ? 0.92 : 0.78 + 0.17 * Math.sin(renderTime / 180);
+                item.material.opacity = item.opacity * opacityFactor;
             }
         }
     }
@@ -468,7 +414,6 @@ export class HeliosphereScene {
             front.position.copy(direction).multiplyScalar(length);
             front.scale.setScalar(Math.max(0.035, base * 1.7));
         }
-        visual.selection.position.copy(direction).multiplyScalar(length);
         return physicalRadius <= 2.05;
     }
 
@@ -546,7 +491,6 @@ export class HeliosphereScene {
                 }
                 const physical = object.userData.physicalRadius as number | undefined;
                 if (physical !== undefined) object.position.set(this.displayRadius(physical), 0, 0);
-                if (object.userData.hssSelection) object.position.copy(this.hssSelectionPosition());
             });
         }
     }
@@ -584,22 +528,32 @@ export class HeliosphereScene {
         return new THREE.BufferGeometry().setFromPoints(points);
     }
 
-    private hssSelectionPosition(): THREE.Vector3 {
-        const physicalRadius = 0.75;
-        const radius = this.displayRadius(physicalRadius);
-        const fraction = (physicalRadius - 0.07) / 1.65;
-        const angle = fraction * Math.PI * 1.7;
-        return new THREE.Vector3(
-            Math.cos(angle) * radius,
-            0.018 * Math.sin(angle * 3),
-            Math.sin(angle) * radius,
-        );
-    }
-
     private displayRadius(physicalAU: number): number {
         return this.state?.scale === 'compressed'
             ? 2 * Math.sqrt(Math.max(0, physicalAU) / 2)
             : physicalAU;
+    }
+
+    private beginPick(event: PointerEvent): void {
+        if (!event.isPrimary || event.button !== 0) return;
+        this.pickOrigin = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+        };
+    }
+
+    private completePick(event: PointerEvent): void {
+        const origin = this.pickOrigin;
+        this.pickOrigin = undefined;
+        if (!origin || event.pointerId !== origin.pointerId ||
+            !event.isPrimary || event.button !== 0) return;
+        if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 5) return;
+        this.pick(event);
+    }
+
+    private cancelPick(event: PointerEvent): void {
+        if (this.pickOrigin?.pointerId === event.pointerId) this.pickOrigin = undefined;
     }
 
     private pick(event: PointerEvent): void {
@@ -607,7 +561,10 @@ export class HeliosphereScene {
         this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
         this.raycaster.setFromCamera(this.pointer, this.camera);
-        const hits = this.raycaster.intersectObjects(this.eventLayer.children, true);
+        const targets = this.eventVisuals
+            .filter((visual) => visual.root.visible && visual.content.visible)
+            .map((visual) => visual.content);
+        const hits = this.raycaster.intersectObjects(targets, true);
         const id = hits.find((hit) => hit.object.userData.eventId)?.object.userData.eventId as string | undefined;
         if (id) this.onEventSelected?.(id);
     }
@@ -670,24 +627,6 @@ function radialTexture(): THREE.CanvasTexture {
         gradient.addColorStop(1, 'rgba(255,255,255,0)');
         context.fillStyle = gradient;
         context.fillRect(0, 0, 128, 128);
-    }
-    return new THREE.CanvasTexture(canvas);
-}
-
-function selectionTexture(): THREE.CanvasTexture {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 128;
-    const context = canvas.getContext('2d');
-    if (context) {
-        context.clearRect(0, 0, 128, 128);
-        context.beginPath();
-        context.arc(64, 64, 47, 0, Math.PI * 2);
-        context.strokeStyle = 'rgba(255,255,255,.98)';
-        context.lineWidth = 5;
-        context.setLineDash([13, 8]);
-        context.shadowColor = 'rgba(133,230,255,.95)';
-        context.shadowBlur = 12;
-        context.stroke();
     }
     return new THREE.CanvasTexture(canvas);
 }

@@ -9,14 +9,16 @@ The three-page guide explains data classes, replay time, and the Earth-condition
 charts.
 
 Drag to orbit the 3D camera, scroll to zoom, and use **Reset view** to return to
-the overview.
+the overview. Orbit drags do not select events; selection requires a short click
+on a visible event marker or propagation front while Replay is paused. Scene
+clicks during playback do not change the selection or replay time.
 
 ## Live and replay
 
 **Live** requests NOAA SWPC’s active real-time solar-wind, magnetic-field, and
 X-ray feeds. The current spacecraft source is shown; it is not assumed to
 always be DSCOVR or ACE. The timeline and telemetry charts show the latest
-three hours, while the event stream requests the preceding 24 hours. Live
+three hours, while the event stream requests the preceding 48 hours. Live
 refresh has a minimum 30-second interval. Entering Live preserves the current
 Replay; switching back restores that Replay’s data and starts it from the
 beginning instead of treating the mismatched Live telemetry and event windows
@@ -38,13 +40,18 @@ data.
 Selecting an event pauses Replay and seeks to a useful view of that event:
 flare selections use the reported peak, directed CME selections advance the
 front into the heliosphere, and other event types use their catalog time. The
-selected event receives a bright scene marker while other event geometry is
-dimmed. Its catalog time is also marked on the telemetry charts. Live selections
-do not move the clock away from the newest observation.
+camera’s zoom and orientation do not change. The selected event keeps its normal
+brightness while other active event geometry is shown at 60% brightness. Its
+catalog time is also marked on the telemetry charts. Live selections do not move
+the clock away from the newest observation.
 
-The event list shows the full catalog for the loaded interval. Event geometry
-and selection beacons in the Replay scene appear only while they are active at
-the current cursor time.
+Click the selected event again, press **Escape** when no dialog is open, or use
+**Clear selection** in the detail panel to clear it. Clicking empty space in the
+solar-system view leaves the selection unchanged. With no active selection, all
+event graphics use their normal brightness.
+
+The event list shows the full catalog for the loaded interval. Event geometry in
+the Replay scene appears only while it is active at the current cursor time.
 
 ## The heliosphere view
 

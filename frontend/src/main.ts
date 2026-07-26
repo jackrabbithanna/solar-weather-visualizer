@@ -9,7 +9,7 @@ import {AppState, AppStore, nearestTelemetry, RadialScale} from './state';
 
 const HOUR_MS = 3_600_000;
 const LIVE_TELEMETRY_WINDOW_MS = 3 * HOUR_MS;
-const LIVE_EVENT_WINDOW_MS = 24 * HOUR_MS;
+const LIVE_EVENT_WINDOW_MS = 48 * HOUR_MS;
 const AU_KM = 149_597_870.7;
 const INITIAL_CME_RADIUS_AU = 21.5 * 695_700 / AU_KM;
 const SELECTED_CME_FOCUS_AU = 0.7;
@@ -210,7 +210,10 @@ function queueRender(): void {
 }
 
 store.addEventListener('change', queueRender);
-scene.onEventSelected = (id) => selectEvent(id);
+scene.onEventSelected = (id) => {
+    if (store.state.mode === 'replay' && store.state.playing) return;
+    selectEvent(id);
+};
 
 function renderUI(): void {
     const state = store.state;
@@ -224,8 +227,10 @@ function renderUI(): void {
     required<HTMLInputElement>('timeline').value = String(
         Math.round((state.cursor - state.rangeStart) / (state.rangeEnd - state.rangeStart) * 10_000),
     );
-    required('play-button').textContent = state.playing ? '❚❚' : '▶';
-    required('play-button').toggleAttribute('disabled', state.mode === 'live');
+    const playButton = required<HTMLButtonElement>('play-button');
+    playButton.textContent = state.playing ? '❚❚' : '▶';
+    playButton.setAttribute('aria-label', state.playing ? 'Pause replay' : 'Play replay');
+    playButton.toggleAttribute('disabled', state.mode === 'live');
     required('provider-status').textContent = state.loading.size ? `Loading ${state.loading.size}` : providerLabel();
     document.querySelectorAll<HTMLElement>('[data-mode]').forEach((button) =>
         button.classList.toggle('active', button.dataset.mode === state.mode));
@@ -290,14 +295,15 @@ function renderEvents(): void {
             const kind = button.dataset.kind;
             if (!kind) return;
             store.toggleFilter(kind);
-            const selectedEventID = preferredEventID(store.state.events?.events ?? [], store.state.selectedEventID);
+            const selectedEventID = retainedEventID(store.state.events?.events ?? [], store.state.selectedEventID);
             if (selectedEventID !== store.state.selectedEventID) store.change({selectedEventID});
         };
     });
     const events = (state.events?.events ?? []).filter((event) => state.eventFilters.has(event.kind));
     required('event-count').textContent = String(events.length);
     required('event-list').innerHTML = events.length ? events.map((event) => `
-      <button class="event-item ${event.id === state.selectedEventID ? 'selected' : ''}" data-event-id="${escapeHTML(event.id)}">
+      <button class="event-item ${event.id === state.selectedEventID ? 'selected' : ''}" data-event-id="${escapeHTML(event.id)}"
+              aria-pressed="${event.id === state.selectedEventID}">
         <i class="event-symbol ${event.kind}">${symbolFor(event.kind)}</i>
         <span><strong>${escapeHTML(event.title)}</strong><small>${shortUTC(Date.parse(event.startTime))}</small></span>
         <em>${event.provenance?.class?.slice(0, 3).toUpperCase() ?? '—'}</em>
@@ -345,7 +351,9 @@ function renderDetail(): void {
       <div class="provenance">
         <i class="${event.provenance?.class ?? ''}"></i>
         <span><strong>${escapeHTML(event.provenance?.class ?? 'unknown')}</strong>${escapeHTML(event.provenance?.provider)} · ${escapeHTML(event.provenance?.dataset)}${event.provenance?.stale ? ' · STALE CACHE' : event.provenance?.cached ? ' · cached' : ''}</span>
-      </div>`;
+      </div>
+      <button id="clear-selection" class="secondary-button clear-selection-button">Clear selection</button>`;
+    required('clear-selection').onclick = () => clearEventSelection();
 }
 
 function renderForecast(): void {
@@ -394,13 +402,21 @@ function selectedEvent(): domain.EventDTO | undefined {
 function selectEvent(id: string): void {
     const event = store.state.events?.events.find((item) => item.id === id);
     if (!event) return;
+    if (store.state.selectedEventID === id) {
+        clearEventSelection();
+        return;
+    }
     const patch: Partial<AppState> = {selectedEventID: id};
     if (store.state.mode === 'replay') {
         patch.cursor = eventFocusTime(event);
         patch.playing = false;
     }
     store.change(patch);
-    scene.focusEvent(id);
+}
+
+function clearEventSelection(): void {
+    if (store.state.selectedEventID === undefined) return;
+    store.change({selectedEventID: undefined});
 }
 
 function eventCatalogTime(event: domain.EventDTO): number | undefined {
@@ -544,7 +560,7 @@ async function enterLive(): Promise<void> {
     if (events.status === 'fulfilled' && live.status === 'fulfilled') {
         store.change({
             events: events.value,
-            selectedEventID: preferredEventID(events.value.events, store.state.selectedEventID),
+            selectedEventID: retainedEventID(events.value.events, store.state.selectedEventID),
         });
         reportIssues(events.value.issues);
     }
@@ -623,9 +639,12 @@ function applyLiveSnapshot(snapshot: domain.LiveSnapshotDTO, status: string, fal
     });
 }
 
-function preferredEventID(events: domain.EventDTO[], preferred?: string): string | undefined {
-    const visible = events.filter((event) => store.state.eventFilters.has(event.kind));
-    return visible.some((event) => event.id === preferred) ? preferred : visible[0]?.id;
+function retainedEventID(events: domain.EventDTO[], preferred?: string): string | undefined {
+    if (!preferred) return undefined;
+    return events.some((event) =>
+        event.id === preferred && store.state.eventFilters.has(event.kind))
+        ? preferred
+        : undefined;
 }
 
 function scheduleLiveRefresh(): void {
@@ -731,6 +750,10 @@ function wireInteractions(): void {
     });
     required('guide-skip').onclick = () => closeGuide();
     required('guide-next').onclick = () => advanceGuide();
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+        clearEventSelection();
+    });
 }
 
 function openRangeDialog(): void {
@@ -827,7 +850,10 @@ async function importBundle(): Promise<void> {
                 generatedAt: bundle.createdAt,
             }),
             scale: view.scale === 'compressed' ? 'compressed' : 'linear',
-            selectedEventID: typeof view.selectedEventID === 'string' ? view.selectedEventID : importedEvents[0]?.id,
+            selectedEventID: retainedEventID(
+                importedEvents,
+                typeof view.selectedEventID === 'string' ? view.selectedEventID : undefined,
+            ),
             status: 'Imported replay bundle.',
         });
         store.setRange(start, end, cursor);
